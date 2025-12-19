@@ -1,6 +1,8 @@
 import puppeteer from "puppeteer";
 
 const baseurl = "e-builder.net";
+
+// Selectors for the login page
 const usernameSelector = "#txtUsername >>> #mwc_id_0_text_input";
 const usernameContinueButtonSelector = "#usernameContinueBtn >>> button";
 const passwordSelector = "#txtPassword >>> #mwc_id_1_text_input";
@@ -78,7 +80,7 @@ export async function isLoggedIn(
   await browser.setCookie(...cookies);
   await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`);
   try {
-    await page.waitForSelector("modus-navbar-profile-menu >>> .sign-out", {
+    await page.waitForSelector(profileMenuSelector, {
       timeout: 5000,
     });
     loggedIn = true;
