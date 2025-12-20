@@ -2,26 +2,51 @@ import Database from "better-sqlite3";
 
 const db = Database("eb.db");
 
-function createTables() {
+export function createTables() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL UNIQUE,
-      account_id TEXT,
+      username TEXT,
+      environment TEXT,
+      account TEXT,
       session_cookies TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
+}
+createTables();
 
-  db.exec(`
-    CREATE IF NOT EXISTS credentials (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL UNIQUE,
-      password TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+const insertSession = db.prepare(`
+    INSERT INTO sessions (username, environment, account, session_cookies) VALUES (?, ?, ?, ?)
   `);
-  db.close();
+
+export function addSession(
+  username: string,
+  environment: string,
+  account: string,
+  session_cookies: string
+) {
+  insertSession.run(username, environment, account, session_cookies);
 }
 
-createTables();
+const getAllSessions = db.prepare("SELECT * FROM sessions");
+export function getSessions() {
+  return getAllSessions.all();
+}
+
+const getUserSessions = db.prepare("SELECT * FROM sessions WHERE username = ?");
+export function getUserSessionsByUsername(username: string) {
+  return getUserSessions.all(username);
+}
+
+const deleteSessionId = db.prepare("DELETE FROM sessions WHERE id = ?");
+export function deleteSessionById(id: number) {
+  deleteSessionId.run(id);
+}
+
+const deleteUserSessions = db.prepare(
+  "DELETE FROM sessions WHERE username = ?"
+);
+export function deleteSessionsByUsername(username: string) {
+  deleteUserSessions.run(username);
+}

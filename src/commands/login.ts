@@ -1,11 +1,11 @@
-import { Args, Command, Flags } from "@oclif/core";
+import { Command, Flags } from "@oclif/core";
 import { password, select, input } from "@inquirer/prompts";
 import { type Cookie } from "puppeteer";
 import ora from "ora";
 import * as eb from "../lib/eb-puppetmaster/auth.js";
+import * as db from "../lib/db.js";
 
 export default class Login extends Command {
-  static override args = {};
   static override description = "log in to e-Builder";
   static override examples = ["<%= config.bin %> <%= command.id %>"];
   static override flags = {
@@ -27,7 +27,7 @@ export default class Login extends Command {
   };
 
   public async run(): Promise<void> {
-    const { args, flags } = await this.parse(Login);
+    const { flags } = await this.parse(Login);
 
     if (!flags.environment) {
       flags.environment = await select({
@@ -84,16 +84,41 @@ export default class Login extends Command {
         !flags.show_browser,
         flags.username,
         pass,
-        flags.account
+        flags.account,
+        async (accounts: eb.Account[]) => {
+          const selectedAccount = await accountSpecifier(accounts);
+          flags.account = selectedAccount.text;
+          return selectedAccount.value;
+        }
       );
     } catch (e: any) {
       spinner.fail(`Failed to log in: ${e.message}`);
       process.exit(1);
     }
     spinner.succeed("Logged in successfully!");
+    db.addSession(
+      flags.username || "",
+      env,
+      flags.account || "",
+      JSON.stringify(cookies)
+    );
     // this.log(JSON.stringify(cookies));
     const isLoggedIn = await eb.isLoggedIn(env, !flags.show_browser, cookies);
     this.log(`Logged in: ${isLoggedIn}`);
     eb.logout(eb.Environment.US3, !flags.show_browser, cookies);
   }
+}
+
+async function accountSpecifier(accounts: eb.Account[]): Promise<eb.Account> {
+  const selectedAccount = await select({
+    message: "Select an account:",
+    choices: accounts.map((account) => ({
+      name: account.text,
+      value: account,
+    })),
+  });
+  if (!selectedAccount) {
+    throw new Error("No account selected");
+  }
+  return selectedAccount;
 }

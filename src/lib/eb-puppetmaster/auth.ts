@@ -1,5 +1,4 @@
 import puppeteer from "puppeteer";
-import { select } from "@inquirer/prompts";
 
 const baseurl = "e-builder.net";
 
@@ -23,7 +22,7 @@ export enum Environment {
   CA = "app.ca",
 }
 
-type Account = {
+export type Account = {
   value: string;
   text: string;
 };
@@ -62,6 +61,7 @@ export async function login(
   username?: string,
   password?: string,
   account?: string,
+  accountSpecifier?: Function,
   browser?: puppeteer.Browser
 ): Promise<puppeteer.Cookie[]> {
   let thisCreatedBrowser = false;
@@ -108,13 +108,9 @@ export async function login(
           selectAccountSelector + " option"
         );
         const accounts = await getAccounts(accountOpttions);
-        const selectedAccount = await select({
-          message: "Select an account:",
-          choices: accounts.map((account) => ({
-            name: account.text,
-            value: account.value,
-          })),
-        });
+        if (!accountSpecifier)
+          throw new Error("Account specifier must be provided");
+        const selectedAccount = await accountSpecifier(accounts);
         await accountSelector?.select(selectedAccount);
         await page.locator(selectAccountContinueButtonSelector).click();
         await page.waitForNavigation();
