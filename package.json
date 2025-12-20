@@ -25,6 +25,7 @@
     "@inquirer/prompts": "^8.1.0",
     "@oclif/core": "^4.8.0",
     "better-sqlite3": "^12.5.0",
+    "ora": "^9.0.0",
     "puppeteer": "^24.34.0"
   },
   "devDependencies": {

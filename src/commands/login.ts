@@ -1,12 +1,11 @@
 import { Args, Command, Flags } from "@oclif/core";
 import { password, select, input } from "@inquirer/prompts";
-import puppeteer from "puppeteer";
+import { type Cookie } from "puppeteer";
+import ora from "ora";
 import * as eb from "../lib/eb-puppetmaster/auth.js";
 
 export default class Login extends Command {
-  static override args = {
-    file: Args.string({ description: "file to read" }),
-  };
+  static override args = {};
   static override description = "log in to e-Builder";
   static override examples = ["<%= config.bin %> <%= command.id %>"];
   static override flags = {
@@ -16,7 +15,10 @@ export default class Login extends Command {
         "show browser window (useful for debugging; default is headless)",
     }),
     username: Flags.string({ char: "u", description: "username" }),
-    account: Flags.string({ char: "a", description: "account" }),
+    account: Flags.string({
+      char: "a",
+      description: "account (if the user has access to multiple accounts)",
+    }),
     environment: Flags.string({
       char: "e",
       description: "environment",
@@ -74,14 +76,21 @@ export default class Login extends Command {
     if (flags.username) {
       pass = await password({ message: "Enter your password:", mask: "*" });
     }
-
-    const cookies = await eb.login(
-      env,
-      !flags.show_browser,
-      flags.username,
-      pass,
-      flags.account
-    );
+    const spinner = ora("Logging in to e-Builder...").start();
+    let cookies: Cookie[] = [];
+    try {
+      cookies = await eb.login(
+        env,
+        !flags.show_browser,
+        flags.username,
+        pass,
+        flags.account
+      );
+    } catch (e: any) {
+      spinner.fail(`Failed to log in: ${e.message}`);
+      process.exit(1);
+    }
+    spinner.succeed("Logged in successfully!");
     // this.log(JSON.stringify(cookies));
     const isLoggedIn = await eb.isLoggedIn(env, !flags.show_browser, cookies);
     this.log(`Logged in: ${isLoggedIn}`);

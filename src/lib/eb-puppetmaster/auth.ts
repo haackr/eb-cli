@@ -80,7 +80,6 @@ export async function login(
   await page.goto(loginUrl);
 
   if (username && password) {
-    console.log(`Logging in as ${username} on ${account}`);
     await page.locator(usernameSelector).fill(username);
     await page.locator(usernameContinueButtonSelector).click();
     await page.waitForNavigation();
