@@ -1,5 +1,5 @@
 import { Args, Command, Flags } from "@oclif/core";
-import { password } from "@inquirer/prompts";
+import { password, select, input } from "@inquirer/prompts";
 import puppeteer from "puppeteer";
 import * as eb from "../lib/eb-puppetmaster/auth.js";
 
@@ -20,7 +20,6 @@ export default class Login extends Command {
     environment: Flags.string({
       char: "e",
       description: "environment",
-      required: true,
       options: ["us1", "us2", "us3", "us4", "gov", "ca"],
     }),
   };
@@ -28,8 +27,19 @@ export default class Login extends Command {
   public async run(): Promise<void> {
     const { args, flags } = await this.parse(Login);
 
-    this.log(flags.account);
-
+    if (!flags.environment) {
+      flags.environment = await select({
+        message: "Select the e-Builder environment you want to log in to:",
+        choices: [
+          { value: "us1", name: "US-1" },
+          { value: "us2", name: "US-2" },
+          { value: "us3", name: "US-3" },
+          { value: "us4", name: "US-4" },
+          { value: "gov", name: "GOV" },
+          { value: "ca", name: "CA" },
+        ],
+      });
+    }
     let env: eb.Environment;
     switch (flags.environment) {
       case "us1":
@@ -54,6 +64,12 @@ export default class Login extends Command {
         throw new Error(`Unknown environment: ${flags.environment}`);
     }
 
+    if (!flags.username && !flags.show_browser) {
+      flags.username = await input({
+        message: "Enter your username:",
+      });
+    }
+
     let pass: string | undefined;
     if (flags.username) {
       pass = await password({ message: "Enter your password:", mask: "*" });
@@ -66,7 +82,7 @@ export default class Login extends Command {
       pass,
       flags.account
     );
-    this.log(JSON.stringify(cookies));
+    // this.log(JSON.stringify(cookies));
     const isLoggedIn = await eb.isLoggedIn(env, !flags.show_browser, cookies);
     this.log(`Logged in: ${isLoggedIn}`);
     eb.logout(eb.Environment.US3, !flags.show_browser, cookies);

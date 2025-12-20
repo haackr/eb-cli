@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer";
+import { select } from "@inquirer/prompts";
 
 const baseurl = "e-builder.net";
 
@@ -20,6 +21,39 @@ export enum Environment {
   US4 = "app-us4",
   GOV = "gov",
   CA = "app.ca",
+}
+
+type Account = {
+  value: string;
+  text: string;
+};
+
+async function getAccounts(
+  accountOptions: puppeteer.ElementHandle[]
+): Promise<Account[]> {
+  let accounts: Account[] = [];
+  for (let i = 1; i < accountOptions.length; i++) {
+    const optionValue = await accountOptions[i]?.evaluate((el) => el.value);
+    const optionText = await accountOptions[i]?.evaluate(
+      (el) => el.textContent
+    );
+    accounts.push({ value: optionValue, text: optionText });
+  }
+  return accounts;
+}
+
+async function selectAccount(
+  accountSelector: puppeteer.ElementHandle,
+  account: string,
+  accountOptions: Account[]
+): Promise<void> {
+  for (const option of accountOptions) {
+    if (option.text.includes(account)) {
+      console.log("Found account");
+      await accountSelector?.select(option.value);
+      break;
+    }
+  }
 }
 
 export async function login(
@@ -46,6 +80,7 @@ export async function login(
   await page.goto(loginUrl);
 
   if (username && password) {
+    console.log(`Logging in as ${username} on ${account}`);
     await page.locator(usernameSelector).fill(username);
     await page.locator(usernameContinueButtonSelector).click();
     await page.waitForNavigation();
@@ -54,17 +89,39 @@ export async function login(
     await page.locator(signInButtonSelector).click();
     await page.waitForNetworkIdle();
     const errorMessageBox = await page.$(errorMessageSelector);
-    console.log(await errorMessageBox?.isVisible());
-    if (await errorMessageBox?.isVisible())
+    if (errorMessageBox && (await errorMessageBox.isVisible()))
       throw new Error("Invalid username / password or account is locked");
-    await page.waitForNavigation();
+    // await page.waitForNavigation();
 
     if (account) {
       console.log(account);
-      await page.locator(selectAccountSelector).fill(account);
+      const accountSelector = await page.waitForSelector(selectAccountSelector);
+      if (!accountSelector) throw new Error("Account selector not found");
+      const accountOptions = await page.$$(selectAccountSelector + " option");
+      const accounts = await getAccounts(accountOptions);
+      await selectAccount(accountSelector, account, accounts);
       await page.locator(selectAccountContinueButtonSelector).click();
+      await page.waitForNavigation();
     } else {
-      await page.$(selectAccountSelector);
+      const accountSelector = await page.$(selectAccountSelector);
+      if (accountSelector && headless) {
+        const accountOpttions = await page.$$(
+          selectAccountSelector + " option"
+        );
+        const accounts = await getAccounts(accountOpttions);
+        const selectedAccount = await select({
+          message: "Select an account:",
+          choices: accounts.map((account) => ({
+            name: account.text,
+            value: account.value,
+          })),
+        });
+        await accountSelector?.select(selectedAccount);
+        await page.locator(selectAccountContinueButtonSelector).click();
+        await page.waitForNavigation();
+      } else {
+        await page.waitForNavigation();
+      }
     }
   } else if (headless) {
     if (thisCreatedBrowser) {
