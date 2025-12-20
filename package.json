@@ -22,10 +22,13 @@
     "topicSeparator": " "
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.1.0",
     "@oclif/core": "^4.8.0",
+    "better-sqlite3": "^12.5.0",
     "puppeteer": "^24.34.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.9.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
