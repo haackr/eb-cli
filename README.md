@@ -17,7 +17,7 @@ USAGE
 # Commands
 
 <!-- commands -->
-* [`eb budgetitems delete [FILE]`](#eb-budgetitems-delete-file)
+* [`eb budgetitems delete FILE`](#eb-budgetitems-delete-file)
 * [`eb budgetitems set [FILE]`](#eb-budgetitems-set-file)
 * [`eb login`](#eb-login)
 * [`eb logout`](#eb-logout)
@@ -28,26 +28,29 @@ USAGE
 * [`eb session test`](#eb-session-test)
 * [`eb users delete [FILE]`](#eb-users-delete-file)
 
-## `eb budgetitems delete [FILE]`
+## `eb budgetitems delete FILE`
 
-describe the command here
+Delete budget items from a CSV file
 
 ```
 USAGE
-  $ eb budgetitems delete [FILE] [-f] [-n <value>]
+  $ eb budgetitems delete FILE [--session-id <value>] [-u <value>] [-s]
 
 ARGUMENTS
-  FILE  file to read
+  FILE  CSV file containing budget item IDs to delete
 
 FLAGS
-  -f, --force
-  -n, --name=<value>  name to print
+  -s, --show-browser        Show browser window
+  -u, --username=<value>    Username to use session for
+      --session-id=<value>  Session ID to use
 
 DESCRIPTION
-  describe the command here
+  Delete budget items from a CSV file
 
 EXAMPLES
-  $ eb budgetitems delete
+  $ eb budgetitems delete items.csv --session-id 1
+
+  $ eb budgetitems delete items.csv --username myuser
 ```
 
 ## `eb budgetitems set [FILE]`
@@ -103,13 +106,14 @@ log out of e-Builder sessions
 
 ```
 USAGE
-  $ eb logout [-s] [-u <value>] [-a <value>] [-A]
+  $ eb logout [-s] [-u <value>] [-a <value>] [-A] [-i <value>]
 
 FLAGS
-  -A, --all               logout from all sessions
-  -a, --account=<value>   account (if the user has access to multiple accounts)
-  -s, --show_browser      show browser window (useful for debugging; default is headless)
-  -u, --username=<value>  username
+  -A, --all                 logout from all sessions
+  -a, --account=<value>     account (if the user has access to multiple accounts)
+  -i, --session_id=<value>  session ID to logout from
+  -s, --show_browser        show browser window (useful for debugging; default is headless)
+  -u, --username=<value>    username
 
 DESCRIPTION
   log out of e-Builder sessions
@@ -119,21 +123,28 @@ ALIASES
 
 EXAMPLES
   $ eb logout
+
+  $ eb logout --session-id 1
+
+  $ eb logout --username john.doe
+
+  $ eb logout --all
 ```
 
 ## `eb session clean`
 
-test e-Builder sessions and remove invalid ones
+test e-Builder sessions, refresh valid ones, and remove invalid ones
 
 ```
 USAGE
-  $ eb session clean [-u <value>]
+  $ eb session clean [-u <value>] [-s]
 
 FLAGS
+  -s, --show_browser      show browser window during testing
   -u, --username=<value>  username to test sessions for (tests all if not specified)
 
 DESCRIPTION
-  test e-Builder sessions and remove invalid ones
+  test e-Builder sessions, refresh valid ones, and remove invalid ones
 
 ALIASES
   $ eb session clean
@@ -142,6 +153,8 @@ EXAMPLES
   $ eb session clean
 
   $ eb session clean --username myuser
+
+  $ eb session clean --show-browser
 ```
 
 ## `eb session create`
@@ -175,13 +188,14 @@ log out of e-Builder sessions
 
 ```
 USAGE
-  $ eb session delete [-s] [-u <value>] [-a <value>] [-A]
+  $ eb session delete [-s] [-u <value>] [-a <value>] [-A] [-i <value>]
 
 FLAGS
-  -A, --all               logout from all sessions
-  -a, --account=<value>   account (if the user has access to multiple accounts)
-  -s, --show_browser      show browser window (useful for debugging; default is headless)
-  -u, --username=<value>  username
+  -A, --all                 logout from all sessions
+  -a, --account=<value>     account (if the user has access to multiple accounts)
+  -i, --session_id=<value>  session ID to logout from
+  -s, --show_browser        show browser window (useful for debugging; default is headless)
+  -u, --username=<value>    username
 
 DESCRIPTION
   log out of e-Builder sessions
@@ -191,6 +205,12 @@ ALIASES
 
 EXAMPLES
   $ eb session delete
+
+  $ eb session delete --session-id 1
+
+  $ eb session delete --username john.doe
+
+  $ eb session delete --all
 ```
 
 ## `eb session list`
@@ -199,10 +219,11 @@ list open e-Builder sessions
 
 ```
 USAGE
-  $ eb session list [-u <value>]
+  $ eb session list [-u <value>] [--json]
 
 FLAGS
   -u, --username=<value>  username to filter sessions by
+      --json              output sessions as JSON
 
 DESCRIPTION
   list open e-Builder sessions
@@ -211,21 +232,24 @@ EXAMPLES
   $ eb session list
 
   $ eb session list --username myuser
+
+  $ eb session list --json
 ```
 
 ## `eb session test`
 
-test e-Builder sessions and remove invalid ones
+test e-Builder sessions, refresh valid ones, and remove invalid ones
 
 ```
 USAGE
-  $ eb session test [-u <value>]
+  $ eb session test [-u <value>] [-s]
 
 FLAGS
+  -s, --show_browser      show browser window during testing
   -u, --username=<value>  username to test sessions for (tests all if not specified)
 
 DESCRIPTION
-  test e-Builder sessions and remove invalid ones
+  test e-Builder sessions, refresh valid ones, and remove invalid ones
 
 ALIASES
   $ eb session clean
@@ -234,6 +258,8 @@ EXAMPLES
   $ eb session test
 
   $ eb session test --username myuser
+
+  $ eb session test --show-browser
 ```
 
 ## `eb users delete [FILE]`

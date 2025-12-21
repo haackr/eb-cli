@@ -1,6 +1,17 @@
 import Database from "better-sqlite3";
+import * as os from "os";
+import * as path from "path";
+import * as fs from "fs";
 
-const db = Database("eb.db");
+const dbDir = path.join(os.homedir(), ".eb-cli");
+const dbPath = path.join(dbDir, "eb.db");
+
+// Ensure the directory exists
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
+const db = Database(dbPath);
 
 export function createTables() {
   db.exec(`

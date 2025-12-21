@@ -24,11 +24,12 @@ export async function deleteBudgetItem(
   const { env, cookies, browser, budgetItem } = options;
   const browserInstance =
     browser || (await BrowserManager.getInstance().getBrowser());
-  const page = await browserInstance.newPage();
+  const context = await browserInstance.createBrowserContext();
+  const page = await context.newPage();
 
   try {
     // Set cookies
-    await page.setCookie(...cookies);
+    await context.setCookie(...cookies);
 
     // Navigate to the budget item page
     const url = `https://${env}.${baseurl}/budgetitem/${budgetItem.budgetItemId}`;
@@ -51,8 +52,6 @@ export async function deleteBudgetItem(
       throw new Error("Delete button not found");
     }
   } finally {
-    if (!browser) {
-      await page.close();
-    }
+    await context.close();
   }
 }
