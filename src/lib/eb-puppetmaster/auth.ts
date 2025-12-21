@@ -145,9 +145,10 @@ export async function isLoggedIn(
   headless: boolean = true,
   cookies: puppeteer.Cookie[],
   browser?: puppeteer.Browser
-): Promise<boolean> {
+): Promise<{ isLoggedIn: boolean; newCookies: puppeteer.Cookie[] }> {
   let thisCreatedBrowser = false;
   let loggedIn = false;
+  let newCookies: puppeteer.Cookie[] = [];
   if (!browser) {
     browser = await puppeteer.launch({
       headless,
@@ -164,13 +165,14 @@ export async function isLoggedIn(
       timeout: 5000,
     });
     loggedIn = true;
+    newCookies = await browser.cookies();
   } catch (error) {
     loggedIn = false;
   }
   if (thisCreatedBrowser) {
     await browser.close();
   }
-  return loggedIn;
+  return { isLoggedIn: loggedIn, newCookies: newCookies };
 }
 
 export async function logout(

@@ -8,6 +8,7 @@ type SessionRow = {
   account: string;
   session_cookies: string;
   created_at: string;
+  expires_at: number | null;
 };
 
 export default class SessionList extends Command {
@@ -39,11 +40,16 @@ export default class SessionList extends Command {
     }
 
     this.log("Open Sessions:");
-    this.log("ID | Username | Environment | Account | Created At");
-    this.log("---|----------|-------------|---------|------------");
+    this.log("ID | Username | Environment | Account | Created At | Expires At");
+    this.log(
+      "---|----------|-------------|---------|------------|------------"
+    );
     for (const session of sessions) {
+      const expiresAt = session.expires_at
+        ? new Date(session.expires_at * 1000).toISOString()
+        : "N/A";
       this.log(
-        `${session.id} | ${session.username} | ${session.environment} | ${session.account} | ${session.created_at}`
+        `${session.id} | ${session.username} | ${session.environment} | ${session.account} | ${session.created_at} | ${expiresAt}`
       );
     }
   }

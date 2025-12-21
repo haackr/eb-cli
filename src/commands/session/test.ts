@@ -1,5 +1,5 @@
 import { Command, Flags } from "@oclif/core";
-import { type Cookie } from "puppeteer";
+import puppeteer, { type Cookie } from "puppeteer";
 import ora from "ora";
 import * as eb from "../../lib/eb-puppetmaster/auth.js";
 import * as db from "../../lib/db.js";
@@ -11,11 +11,12 @@ type SessionRow = {
   account: string;
   session_cookies: string;
   created_at: string;
+  expires_at: number | null;
 };
 
 export default class SessionTest extends Command {
   static override description =
-    "test e-Builder sessions and remove invalid ones";
+    "test e-Builder sessions, refresh valid ones, and remove invalid ones";
   static override examples = [
     "<%= config.bin %> <%= command.id %>",
     "<%= config.bin %> <%= command.id %> --username myuser",
@@ -80,9 +81,30 @@ export default class SessionTest extends Command {
       const cookies: Cookie[] = JSON.parse(session.session_cookies);
 
       try {
-        const isLoggedIn = await eb.isLoggedIn(env, true, cookies);
+        const { isLoggedIn, newCookies } = await eb.isLoggedIn(
+          env,
+          true,
+          cookies
+        );
         if (isLoggedIn) {
-          spinner.succeed(`Session valid`);
+          // Update session with new cookies
+          let newExpiresAt: number | null = null;
+          for (const cookie of newCookies) {
+            if (cookie.expires !== undefined && cookie.expires !== -1) {
+              if (newExpiresAt === null || cookie.expires < newExpiresAt) {
+                newExpiresAt = cookie.expires;
+              }
+            }
+          }
+          db.updateSessionById(
+            session.id,
+            session.username,
+            session.environment,
+            session.account,
+            JSON.stringify(newCookies),
+            newExpiresAt
+          );
+          spinner.succeed(`Session valid and refreshed`);
         } else {
           spinner.fail(`Session invalid`);
           invalidSessions.push(session);

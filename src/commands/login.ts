@@ -103,11 +103,23 @@ export default class Login extends Command {
       await eb.logout(env, !flags.show_browser, cookies);
       process.exit(1);
     }
+
+    // Calculate session expiration from cookies
+    let expiresAt: number | null = null;
+    for (const cookie of cookies) {
+      if (cookie.expires !== undefined && cookie.expires !== -1) {
+        if (expiresAt === null || cookie.expires < expiresAt) {
+          expiresAt = cookie.expires;
+        }
+      }
+    }
+
     db.addSession(
       flags.username || "",
       env,
       flags.account || "",
-      JSON.stringify(cookies)
+      JSON.stringify(cookies),
+      expiresAt
     );
     this.log(`Session saved!`);
     // this.log(JSON.stringify(cookies));

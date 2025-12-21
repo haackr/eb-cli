@@ -12,6 +12,7 @@ type SessionRow = {
   account: string;
   session_cookies: string;
   created_at: string;
+  expires_at: number | null;
 };
 
 export default class Logout extends Command {
