@@ -19,11 +19,16 @@ export default class SessionTest extends Command {
   static override examples = [
     "<%= config.bin %> <%= command.id %>",
     "<%= config.bin %> <%= command.id %> --username myuser",
+    "<%= config.bin %> <%= command.id %> --show-browser",
   ];
   static override flags = {
     username: Flags.string({
       char: "u",
       description: "username to test sessions for (tests all if not specified)",
+    }),
+    show_browser: Flags.boolean({
+      char: "s",
+      description: "show browser window during testing",
     }),
   };
   static override aliases: string[] = ["session:clean"];
@@ -82,7 +87,7 @@ export default class SessionTest extends Command {
       try {
         const { isLoggedIn, newCookies } = await eb.isLoggedIn(
           env,
-          true,
+          !flags.show_browser,
           cookies
         );
         if (isLoggedIn) {

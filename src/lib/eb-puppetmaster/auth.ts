@@ -137,19 +137,27 @@ export async function isLoggedIn(
       `--app=http://${env}.${baseurl}`,
     ]);
   }
-  const [page] = await browser.pages();
-  if (!page) throw new Error("No page found");
-  await browser.setCookie(...cookies);
+
+  // Create a new browser context for isolation
+  const context = await browser.createBrowserContext();
+  const page = await context.newPage();
+
+  // Clear existing cookies and set new ones
+  await context.setCookie(...cookies);
   await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`);
   try {
     await page.waitForSelector(myHomeTabSelector, {
       timeout: 5000,
     });
     loggedIn = true;
-    newCookies = await browser.cookies();
+    newCookies = await context.cookies();
   } catch (error) {
     loggedIn = false;
   }
+
+  // Close the context to clean up
+  await context.close();
+
   return { isLoggedIn: loggedIn, newCookies: newCookies };
 }
 

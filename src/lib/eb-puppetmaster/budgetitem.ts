@@ -3,10 +3,10 @@ import { Environment, baseurl, BrowserManager } from "./index.js";
 
 export type BudgetItem = {
   budgetItemId: string;
-  accountCode: string;
+  accountCode?: string;
   projectName?: string;
-  projectId: string;
-  budgetId: string;
+  projectId?: string;
+  budgetId?: string;
   allowCharges?: boolean;
   approvalRequiredForChange?: boolean;
 };
@@ -20,4 +20,39 @@ type deleteBudgetItemArgs = {
 
 export async function deleteBudgetItem(
   options: deleteBudgetItemArgs
-): Promise<void> {}
+): Promise<void> {
+  const { env, cookies, browser, budgetItem } = options;
+  const browserInstance =
+    browser || (await BrowserManager.getInstance().getBrowser());
+  const page = await browserInstance.newPage();
+
+  try {
+    // Set cookies
+    await page.setCookie(...cookies);
+
+    // Navigate to the budget item page
+    const url = `https://${env}.${baseurl}/budgetitem/${budgetItem.budgetItemId}`;
+    await page.goto(url, { waitUntil: "networkidle0" });
+
+    // Assume there's a delete button with selector, e.g., button[data-action="delete"]
+    // This is a placeholder; actual implementation needs to match e-Builder's UI
+    const deleteButton = await page.$('button[data-action="delete"]');
+    if (deleteButton) {
+      await deleteButton.click();
+      // Wait for confirmation dialog and confirm
+      await page.waitForSelector(".confirmation-dialog");
+      const confirmButton = await page.$(".confirmation-dialog button.confirm");
+      if (confirmButton) {
+        await confirmButton.click();
+        // Wait for deletion to complete
+        await page.waitForNavigation({ waitUntil: "networkidle0" });
+      }
+    } else {
+      throw new Error("Delete button not found");
+    }
+  } finally {
+    if (!browser) {
+      await page.close();
+    }
+  }
+}
