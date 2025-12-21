@@ -172,14 +172,16 @@ export async function logout(
       `--app=http://${env}.${baseurl}`,
     ]);
   }
-  
+
   // Create a new browser context for isolation
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
-  
+
   await context.setCookie(...cookies);
-  await page.goto(`https://${env}.${baseurl}/Login/Logout.aspx`);
-  
+  await page.goto(`https://${env}.${baseurl}/Login/Logout.aspx`, {
+    waitUntil: "networkidle0",
+  });
+
   // Close the context to clean up
   await context.close();
 }

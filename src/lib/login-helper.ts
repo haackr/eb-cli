@@ -2,6 +2,7 @@ import { select, input, password } from "@inquirer/prompts";
 import ora from "ora";
 import * as eb from "./eb-puppetmaster/index.js";
 import * as db from "./db.js";
+import type { Account } from "./eb-puppetmaster/index.js";
 
 interface LoginOptions {
   showBrowser?: boolean;
@@ -70,7 +71,11 @@ export async function promptLoginAndSaveSession(
       username,
       pass,
       options.account,
-      accountSpecifier
+      async (accounts: Account[]) => {
+        const selectedAccount = await accountSpecifier(accounts);
+        options.account = selectedAccount.text;
+        return selectedAccount.value;
+      }
     );
   } catch (e: any) {
     spinner.fail(`Failed to log in: ${e.message}`);
@@ -85,16 +90,18 @@ export async function promptLoginAndSaveSession(
   }
 
   spinner.succeed("Logged in successfully!");
-  db.addSession(username, env, options.account || "", JSON.stringify(cookies));
+  db.addSession(
+    username,
+    eb.getShortEnv(env),
+    options.account || "",
+    JSON.stringify(cookies)
+  );
 
   // Close the browser to allow the process to exit
   await eb.BrowserManager.getInstance().closeBrowser();
 }
 
-async function accountSpecifier(accounts: eb.Account[]): Promise<string> {
-  if (accounts.length === 1) {
-    return accounts[0]!.value;
-  }
+async function accountSpecifier(accounts: eb.Account[]): Promise<Account> {
   const selectedAccount = await select({
     message: "Select an account:",
     choices: accounts.map((account) => ({
@@ -105,5 +112,5 @@ async function accountSpecifier(accounts: eb.Account[]): Promise<string> {
   if (!selectedAccount) {
     throw new Error("No account selected");
   }
-  return selectedAccount.value;
+  return selectedAccount;
 }

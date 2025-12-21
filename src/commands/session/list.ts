@@ -1,6 +1,7 @@
 import { Command, Flags } from "@oclif/core";
 import Table from "cli-table3";
 import * as db from "../../lib/db.js";
+import * as eb from "../../lib/eb-puppetmaster/index.js";
 
 type SessionRow = {
   id: number;
@@ -51,7 +52,7 @@ export default class SessionList extends Command {
       table.push([
         session.id,
         session.username,
-        session.environment,
+        eb.getDisplayName(session.environment),
         session.account,
         new Date(session.created_at + "Z").toLocaleString(undefined, {
           year: "numeric",

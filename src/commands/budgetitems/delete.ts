@@ -59,7 +59,9 @@ export default class BudgetitemsDelete extends Command {
       } else {
         // Multiple sessions, prompt to select
         const choices = sessions.map((s) => ({
-          name: `${s.username} (${s.environment}/${s.account}) - ${s.created_at}`,
+          name: `${s.username} (${eb.getDisplayName(s.environment)}/${
+            s.account
+          }) - ${s.created_at}`,
           value: s,
         }));
         session = await select({
@@ -81,7 +83,9 @@ export default class BudgetitemsDelete extends Command {
         } else {
           // Prompt to select
           const choices = newSessions.map((s) => ({
-            name: `${s.username} (${s.environment}/${s.account}) - ${s.created_at}`,
+            name: `${s.username} (${eb.getDisplayName(s.environment)}/${
+              s.account
+            }) - ${s.created_at}`,
             value: s,
           }));
           session = await select({
@@ -119,29 +123,7 @@ export default class BudgetitemsDelete extends Command {
     const items = parsed.data as { budgetItemId: string }[];
 
     // Get environment
-    let env: eb.Environment;
-    switch (session.environment) {
-      case "app":
-        env = eb.Environment.US1;
-        break;
-      case "app-us2":
-        env = eb.Environment.US2;
-        break;
-      case "app-us3":
-        env = eb.Environment.US3;
-        break;
-      case "app-us4":
-        env = eb.Environment.US4;
-        break;
-      case "gov":
-        env = eb.Environment.GOV;
-        break;
-      case "app.ca":
-        env = eb.Environment.CA;
-        break;
-      default:
-        this.error(`Unknown environment: ${session.environment}`);
-    }
+    const env = eb.getEnvironment(session.environment);
 
     const cookies = JSON.parse(session.session_cookies);
 

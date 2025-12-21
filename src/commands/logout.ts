@@ -54,6 +54,8 @@ export default class Logout extends Command {
         return;
       }
       await this.logoutSession(session, !flags.show_browser);
+      // Close the browser to allow the process to exit
+      await eb.BrowserManager.getInstance().closeBrowser();
       return;
     }
 
@@ -73,7 +75,9 @@ export default class Logout extends Command {
     } else if (!flags.all) {
       // Prompt to select which session to logout
       const choices = sessions.map((session) => ({
-        name: `${session.username} - ${session.environment} - ${session.account}`,
+        name: `${session.username} - ${eb.getDisplayName(
+          session.environment
+        )} - ${session.account}`,
         value: session,
       }));
       selectedSession = await select({
@@ -103,34 +107,14 @@ export default class Logout extends Command {
     session: SessionRow,
     show_browser: boolean
   ): Promise<boolean> {
-    let env: eb.Environment;
-    switch (session.environment) {
-      case "app":
-        env = eb.Environment.US1;
-        break;
-      case "app-us2":
-        env = eb.Environment.US2;
-        break;
-      case "app-us3":
-        env = eb.Environment.US3;
-        break;
-      case "app-us4":
-        env = eb.Environment.US4;
-        break;
-      case "gov":
-        env = eb.Environment.GOV;
-        break;
-      case "app.ca":
-        env = eb.Environment.CA;
-        break;
-      default:
-        throw new Error(`Unknown environment: ${session.environment}`);
-    }
+    const env = eb.getEnvironment(session.environment);
 
     const cookies: Cookie[] = JSON.parse(session.session_cookies);
 
     const spinner = ora(
-      `Logging out of account ${session.username} - ${session.environment} - ${session.account}...`
+      `Logging out of account ${session.username} - ${eb.getDisplayName(
+        session.environment
+      )} - ${session.account}...`
     ).start();
     try {
       await eb.logout(env, show_browser, cookies);

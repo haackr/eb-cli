@@ -47,6 +47,7 @@ export function getSessionById(id: number) {
 const deleteSessionId = db.prepare("DELETE FROM sessions WHERE id = ?");
 export function deleteSessionById(id: number) {
   deleteSessionId.run(id);
+  resetSequenceIfEmpty();
 }
 
 const deleteUserSessions = db.prepare(
@@ -54,6 +55,7 @@ const deleteUserSessions = db.prepare(
 );
 export function deleteSessionsByUsername(username: string) {
   deleteUserSessions.run(username);
+  resetSequenceIfEmpty();
 }
 
 const dbupdateSessionById = db.prepare(
@@ -67,4 +69,13 @@ export function updateSessionById(
   session_cookies: string
 ) {
   dbupdateSessionById.run(username, environment, account, session_cookies, id);
+}
+
+function resetSequenceIfEmpty() {
+  const count = db.prepare("SELECT COUNT(*) as count FROM sessions").get() as {
+    count: number;
+  };
+  if (count.count === 0) {
+    db.prepare("DELETE FROM sqlite_sequence WHERE name='sessions'").run();
+  }
 }

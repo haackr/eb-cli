@@ -54,33 +54,12 @@ export default class SessionTest extends Command {
 
     for (const session of sessions) {
       const spinner = ora(
-        `Testing session for ${session.username} (${session.environment}/${session.account})`
+        `Testing session for ${session.username} (${eb.getDisplayName(
+          session.environment
+        )}/${session.account})`
       ).start();
 
-      let env: eb.Environment;
-      switch (session.environment) {
-        case "app":
-          env = eb.Environment.US1;
-          break;
-        case "app-us2":
-          env = eb.Environment.US2;
-          break;
-        case "app-us3":
-          env = eb.Environment.US3;
-          break;
-        case "app-us4":
-          env = eb.Environment.US4;
-          break;
-        case "gov":
-          env = eb.Environment.GOV;
-          break;
-        case "app.ca":
-          env = eb.Environment.CA;
-          break;
-        default:
-          spinner.fail(`Unknown environment: ${session.environment}`);
-          continue;
-      }
+      const env = eb.getEnvironment(session.environment);
 
       const cookies: Cookie[] = JSON.parse(session.session_cookies);
 
@@ -115,7 +94,9 @@ export default class SessionTest extends Command {
       for (const session of invalidSessions) {
         db.deleteSessionById(session.id);
         this.log(
-          `Removed session: ${session.username} (${session.environment}/${session.account})`
+          `Removed session: ${session.username} (${eb.getDisplayName(
+            session.environment
+          )}/${session.account})`
         );
       }
     } else {
