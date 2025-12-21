@@ -172,8 +172,14 @@ export async function logout(
       `--app=http://${env}.${baseurl}`,
     ]);
   }
-  await browser.setCookie(...cookies);
-  let [page] = await browser.pages();
-  if (!page) page = await browser.newPage();
+  
+  // Create a new browser context for isolation
+  const context = await browser.createBrowserContext();
+  const page = await context.newPage();
+  
+  await context.setCookie(...cookies);
   await page.goto(`https://${env}.${baseurl}/Login/Logout.aspx`);
+  
+  // Close the context to clean up
+  await context.close();
 }

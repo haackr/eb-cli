@@ -1,4 +1,5 @@
 import { Command, Flags } from "@oclif/core";
+import Table from "cli-table3";
 import * as db from "../../lib/db.js";
 
 type SessionRow = {
@@ -38,13 +39,33 @@ export default class SessionList extends Command {
       return;
     }
 
-    this.log("Open Sessions:");
-    this.log("ID | Username | Environment | Account | Created At");
-    this.log("---|----------|-------------|---------|------------");
+    const table = new Table({
+      head: ["ID", "Username", "Environment", "Account", "Created At"],
+      style: {
+        head: ["cyan"],
+        border: ["gray"],
+      },
+    });
+
     for (const session of sessions) {
-      this.log(
-        `${session.id} | ${session.username} | ${session.environment} | ${session.account} | ${session.created_at}`
-      );
+      table.push([
+        session.id,
+        session.username,
+        session.environment,
+        session.account,
+        new Date(session.created_at + "Z").toLocaleString(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          timeZoneName: "short",
+        }),
+      ]);
     }
+
+    this.log("Open Sessions:");
+    this.log(table.toString());
   }
 }
