@@ -11,7 +11,6 @@ type SessionRow = {
   account: string;
   session_cookies: string;
   created_at: string;
-  expires_at: number | null;
 };
 
 export default class SessionTest extends Command {
@@ -88,21 +87,12 @@ export default class SessionTest extends Command {
         );
         if (isLoggedIn) {
           // Update session with new cookies
-          let newExpiresAt: number | null = null;
-          for (const cookie of newCookies) {
-            if (cookie.expires !== undefined && cookie.expires !== -1) {
-              if (newExpiresAt === null || cookie.expires < newExpiresAt) {
-                newExpiresAt = cookie.expires;
-              }
-            }
-          }
           db.updateSessionById(
             session.id,
             session.username,
             session.environment,
             session.account,
-            JSON.stringify(newCookies),
-            newExpiresAt
+            JSON.stringify(newCookies)
           );
           spinner.succeed(`Session valid and refreshed`);
         } else {

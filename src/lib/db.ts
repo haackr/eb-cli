@@ -10,31 +10,23 @@ export function createTables() {
       environment TEXT,
       account TEXT,
       session_cookies TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      expires_at INTEGER
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
-  // Add expires_at column if it doesn't exist (for existing databases)
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN expires_at INTEGER;`);
-  } catch (e) {
-    // Column already exists or other error, ignore
-  }
 }
 createTables();
 
 const insertSession = db.prepare(`
-    INSERT INTO sessions (username, environment, account, session_cookies, expires_at) VALUES (?, ?, ?, ?, ?)
+    INSERT INTO sessions (username, environment, account, session_cookies) VALUES (?, ?, ?, ?)
   `);
 
 export function addSession(
   username: string,
   environment: string,
   account: string,
-  session_cookies: string,
-  expiresAt: number | null = null
+  session_cookies: string
 ) {
-  insertSession.run(username, environment, account, session_cookies, expiresAt);
+  insertSession.run(username, environment, account, session_cookies);
 }
 
 const getAllSessions = db.prepare("SELECT * FROM sessions");
@@ -65,22 +57,14 @@ export function deleteSessionsByUsername(username: string) {
 }
 
 const dbupdateSessionById = db.prepare(
-  `UPDATE sessions SET username = ?, environment = ?, account = ?, session_cookies = ?, expires_at = ? WHERE id = ?`
+  `UPDATE sessions SET username = ?, environment = ?, account = ?, session_cookies = ? WHERE id = ?`
 );
 export function updateSessionById(
   id: number,
   username: string,
   environment: string,
   account: string,
-  session_cookies: string,
-  expiresAt: number | null = null
+  session_cookies: string
 ) {
-  dbupdateSessionById.run(
-    username,
-    environment,
-    account,
-    session_cookies,
-    expiresAt,
-    id
-  );
+  dbupdateSessionById.run(username, environment, account, session_cookies, id);
 }
