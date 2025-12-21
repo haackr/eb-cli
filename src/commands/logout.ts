@@ -30,6 +30,7 @@ export default class Logout extends Command {
     }),
     all: Flags.boolean({ char: "A", description: "logout from all sessions" }),
   };
+  static override aliases: string[] = ["session:delete"];
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(Logout);

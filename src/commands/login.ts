@@ -25,6 +25,7 @@ export default class Login extends Command {
       options: ["us1", "us2", "us3", "us4", "gov", "ca"],
     }),
   };
+  static override aliases: string[] = ["session:create"];
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(Login);
