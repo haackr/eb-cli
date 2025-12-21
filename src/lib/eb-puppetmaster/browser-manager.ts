@@ -1,4 +1,5 @@
 import puppeteer from "puppeteer";
+import { execSync } from "child_process";
 
 export class BrowserManager {
   private static instance: BrowserManager;
@@ -52,10 +53,25 @@ export class BrowserManager {
     args?: string[]
   ): Promise<puppeteer.Browser> {
     if (!this.browser || this.browser.connected === false) {
-      this.browser = await puppeteer.launch({
-        headless,
-        args: args || ["--no-sandbox"],
-      });
+      try {
+        this.browser = await puppeteer.launch({
+          headless,
+          args: args || ["--no-sandbox"],
+        });
+      } catch (error) {
+        console.log("Puppeteer failed to launch browser. Attempting to install Chrome dependencies...");
+        // Run the install command
+        execSync("npx puppeteer browsers install chrome --install-deps", { stdio: 'inherit' });
+        // Retry launch
+        try {
+          this.browser = await puppeteer.launch({
+            headless,
+            args: args || ["--no-sandbox"],
+          });
+        } catch (retryError) {
+          throw new Error(`Failed to launch browser after installing dependencies: ${retryError}`);
+        }
+      }
     }
     return this.browser;
   }
