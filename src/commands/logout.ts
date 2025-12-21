@@ -2,7 +2,7 @@ import { Command, Flags } from "@oclif/core";
 import { select, input } from "@inquirer/prompts";
 import { type Cookie } from "puppeteer";
 import ora from "ora";
-import * as eb from "../lib/eb-puppetmaster/auth.js";
+import * as eb from "../lib/eb-puppetmaster/index.js";
 import * as db from "../lib/db.js";
 
 type SessionRow = {
@@ -87,11 +87,15 @@ export default class Logout extends Command {
       for (const session of sessions) {
         await this.logoutSession(session, !flags.show_browser);
       }
+      // Close the browser to allow the process to exit
+      await eb.BrowserManager.getInstance().closeBrowser();
       return;
     } else {
       // Logout from the selected session
       if (!selectedSession) throw new Error("No session selected");
       await this.logoutSession(selectedSession, !flags.show_browser);
+      // Close the browser to allow the process to exit
+      await eb.BrowserManager.getInstance().closeBrowser();
     }
   }
 

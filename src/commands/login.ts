@@ -2,7 +2,7 @@ import { Command, Flags } from "@oclif/core";
 import { password, select, input } from "@inquirer/prompts";
 import { type Cookie } from "puppeteer";
 import ora from "ora";
-import * as eb from "../lib/eb-puppetmaster/auth.js";
+import * as eb from "../lib/eb-puppetmaster/index.js";
 import * as db from "../lib/db.js";
 
 export default class Login extends Command {
@@ -112,6 +112,9 @@ export default class Login extends Command {
     );
     this.log(`Session saved!`);
     // this.log(JSON.stringify(cookies));
+
+    // Close the browser to allow the process to exit
+    await eb.BrowserManager.getInstance().closeBrowser();
   }
 }
 

@@ -1,7 +1,7 @@
 import { Command, Flags } from "@oclif/core";
 import puppeteer, { type Cookie } from "puppeteer";
 import ora from "ora";
-import * as eb from "../../lib/eb-puppetmaster/auth.js";
+import * as eb from "../../lib/eb-puppetmaster/index.js";
 import * as db from "../../lib/db.js";
 
 type SessionRow = {
@@ -116,5 +116,8 @@ export default class SessionTest extends Command {
     } else {
       this.log("\nAll sessions are valid.");
     }
+
+    // Close the browser to allow the process to exit
+    await eb.BrowserManager.getInstance().closeBrowser();
   }
 }

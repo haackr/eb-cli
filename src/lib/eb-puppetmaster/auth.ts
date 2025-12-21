@@ -1,6 +1,5 @@
 import puppeteer from "puppeteer";
-
-const baseurl = "e-builder.net";
+import { Environment, baseurl, BrowserManager } from "./index.js";
 
 // Selectors for the login page
 const usernameSelector = "#txtUsername >>> #mwc_id_0_text_input";
@@ -12,15 +11,6 @@ const selectAccountContinueButtonSelector =
   "#selectAccountContinueBtn >>> button";
 const myHomeTabSelector = "#ctl00_ucTopNav2_tabHomeLink";
 const errorMessageSelector = "#errorMessage";
-
-export enum Environment {
-  US1 = "app",
-  US2 = "app-us2",
-  US3 = "app-us3",
-  US4 = "app-us4",
-  GOV = "gov",
-  CA = "app.ca",
-}
 
 export type Account = {
   value: string;
@@ -64,13 +54,11 @@ export async function login(
   accountSpecifier?: Function,
   browser?: puppeteer.Browser
 ): Promise<puppeteer.Cookie[]> {
-  let thisCreatedBrowser = false;
   if (!browser) {
-    browser = await puppeteer.launch({
-      headless,
-      args: [`--app=http://${env}.${baseurl}`, `--window-size=800,600`],
-    });
-    thisCreatedBrowser = true;
+    browser = await BrowserManager.getInstance().getBrowser(headless, [
+      `--app=http://${env}.${baseurl}`,
+      `--window-size=800,600`,
+    ]);
   }
   const [page] = await browser.pages();
 
@@ -121,9 +109,6 @@ export async function login(
       }
     }
   } else if (headless) {
-    if (thisCreatedBrowser) {
-      await browser.close();
-    }
     throw new Error("Username and password must be provided for headless mode");
   } else {
     await page.waitForSelector(usernameSelector);
@@ -136,9 +121,6 @@ export async function login(
   }
 
   const cookies = await browser.cookies();
-  if (thisCreatedBrowser) {
-    await browser.close();
-  }
   return cookies;
 }
 
@@ -148,15 +130,12 @@ export async function isLoggedIn(
   cookies: puppeteer.Cookie[],
   browser?: puppeteer.Browser
 ): Promise<{ isLoggedIn: boolean; newCookies: puppeteer.Cookie[] }> {
-  let thisCreatedBrowser = false;
   let loggedIn = false;
   let newCookies: puppeteer.Cookie[] = [];
   if (!browser) {
-    browser = await puppeteer.launch({
-      headless,
-      args: [`--app=http://${env}.${baseurl}`],
-    });
-    thisCreatedBrowser = true;
+    browser = await BrowserManager.getInstance().getBrowser(headless, [
+      `--app=http://${env}.${baseurl}`,
+    ]);
   }
   const [page] = await browser.pages();
   if (!page) throw new Error("No page found");
@@ -171,9 +150,6 @@ export async function isLoggedIn(
   } catch (error) {
     loggedIn = false;
   }
-  if (thisCreatedBrowser) {
-    await browser.close();
-  }
   return { isLoggedIn: loggedIn, newCookies: newCookies };
 }
 
@@ -183,19 +159,13 @@ export async function logout(
   cookies: puppeteer.Cookie[],
   browser?: puppeteer.Browser
 ): Promise<void> {
-  let thisCreatedBrowser = false;
   if (!browser) {
-    browser = await puppeteer.launch({
-      headless,
-      args: [`--app=http://${env}.${baseurl}`],
-    });
-    thisCreatedBrowser = true;
+    browser = await BrowserManager.getInstance().getBrowser(headless, [
+      `--app=http://${env}.${baseurl}`,
+    ]);
   }
   await browser.setCookie(...cookies);
   let [page] = await browser.pages();
   if (!page) page = await browser.newPage();
   await page.goto(`https://${env}.${baseurl}/Login/Logout.aspx`);
-  if (thisCreatedBrowser) {
-    await browser.close();
-  }
 }
