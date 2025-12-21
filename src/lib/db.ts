@@ -35,7 +35,7 @@ export function getSessions() {
 }
 
 const getUserSessions = db.prepare("SELECT * FROM sessions WHERE username = ?");
-export function getUserSessionsByUsername(username: string) {
+export function getSessionsByUsername(username: string) {
   return getUserSessions.all(username);
 }
 

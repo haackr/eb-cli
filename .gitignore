@@ -6,3 +6,4 @@ build/
 *.tsbuildinfo
 .vscode/
 *.db
+.github/

@@ -96,16 +96,20 @@ export default class Login extends Command {
       process.exit(1);
     }
     spinner.succeed("Logged in successfully!");
+    const isLoggedIn = await eb.isLoggedIn(env, !flags.show_browser, cookies);
+    if (!isLoggedIn) {
+      this.error("Failed to verify login. Attepting to log out...");
+      await eb.logout(env, !flags.show_browser, cookies);
+      process.exit(1);
+    }
     db.addSession(
       flags.username || "",
       env,
       flags.account || "",
       JSON.stringify(cookies)
     );
+    this.log(`Session saved!`);
     // this.log(JSON.stringify(cookies));
-    const isLoggedIn = await eb.isLoggedIn(env, !flags.show_browser, cookies);
-    this.log(`Logged in: ${isLoggedIn}`);
-    eb.logout(eb.Environment.US3, !flags.show_browser, cookies);
   }
 }
 
