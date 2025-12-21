@@ -29,10 +29,11 @@ export default class BudgetitemsDelete extends Command {
       char: "u",
       description: "Username to use session for",
     }),
-    "show-browser": Flags.boolean({
+    show_browser: Flags.boolean({
       char: "s",
       description: "Show browser window",
     }),
+    "dry-run": Flags.boolean({ description: "Dry run (no actual deletion)" }),
   };
 
   public async run(): Promise<void> {
@@ -70,7 +71,7 @@ export default class BudgetitemsDelete extends Command {
       if (allSessions.length === 0) {
         // No sessions, prompt to login
         this.log("No open sessions found. Please log in first.");
-        await promptLoginAndSaveSession({ showBrowser: flags["show-browser"] });
+        await promptLoginAndSaveSession({ showBrowser: flags.show_browser });
         // After login, get the new session
         const newSessions = db.getSessions() as SessionRow[];
         if (newSessions.length === 1) {
@@ -115,7 +116,13 @@ export default class BudgetitemsDelete extends Command {
         `CSV parsing errors: ${parsed.errors.map((e) => e.message).join(", ")}`
       );
     }
-    const items = parsed.data as { budgetItemId: string }[];
+    const items = parsed.data as {
+      portalId: string;
+      itemId: string;
+      budgetId?: string;
+      accountCode?: string;
+      projectName?: string;
+    }[];
 
     // Get environment
     const env = eb.getEnvironment(session.environment);
@@ -123,7 +130,7 @@ export default class BudgetitemsDelete extends Command {
     let cookies = JSON.parse(session.session_cookies);
 
     // Check and refresh session
-    if (!(await refreshSessionIfNeeded(session.id))) {
+    if (!(await refreshSessionIfNeeded(session.id, !flags.show_browser))) {
       this.error("Session has expired. Please log in again using 'eb login'.");
     }
     // Re-parse cookies after refresh
@@ -131,14 +138,18 @@ export default class BudgetitemsDelete extends Command {
     cookies = JSON.parse(refreshedSession.session_cookies);
 
     // Delete each item
-    const browser = await eb.BrowserManager.getInstance().getBrowser();
+    const browser = await eb.BrowserManager.getInstance().getBrowser(
+      !flags.show_browser,
+      !flags.show_browser ? ["--window-size=1200,800"] : undefined
+    );
+
     let refreshCounter = 0;
     for (const item of items) {
-      if (!item.budgetItemId) continue;
+      if (!item.itemId) continue;
 
       // Refresh session every 10 items
       if (refreshCounter % 10 === 0) {
-        if (!(await refreshSessionIfNeeded(session.id))) {
+        if (!(await refreshSessionIfNeeded(session.id, !flags.show_browser))) {
           this.error(
             "Session has expired during operation. Please log in again using 'eb login'."
           );
@@ -147,17 +158,22 @@ export default class BudgetitemsDelete extends Command {
         cookies = JSON.parse(refreshedSession2.session_cookies);
       }
 
-      const spinner = ora(`Deleting budget item ${item.budgetItemId}`).start();
+      const spinner = ora(`Deleting budget item ${item.itemId}`).start();
       try {
         await eb.deleteBudgetItem({
           env,
           cookies,
           browser,
-          budgetItem: { budgetItemId: item.budgetItemId },
+          budgetItem: {
+            budgetItemId: item.itemId,
+            projectId: item.portalId,
+            ...(item.budgetId && { budgetId: item.budgetId }),
+          },
+          dryRun: flags["dry-run"],
         });
-        spinner.succeed(`Deleted budget item ${item.budgetItemId}`);
+        spinner.succeed(`Deleted budget item ${item.itemId}`);
       } catch (e: any) {
-        spinner.fail(`Failed to delete ${item.budgetItemId}: ${e.message}`);
+        spinner.fail(`Failed to delete ${item.itemId}: ${e.message}`);
       }
       refreshCounter++;
     }

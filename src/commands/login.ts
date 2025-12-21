@@ -11,6 +11,7 @@ export default class Login extends Command {
         "show browser window (useful for debugging; default is headless)",
     }),
     username: Flags.string({ char: "u", description: "username" }),
+    password: Flags.string({ char: "p", description: "password" }),
     account: Flags.string({
       char: "a",
       description: "account (if the user has access to multiple accounts)",
@@ -30,6 +31,7 @@ export default class Login extends Command {
     if (flags.show_browser !== undefined)
       options.showBrowser = flags.show_browser;
     if (flags.username) options.username = flags.username;
+    if (flags.password) options.password = flags.password;
     if (flags.account) options.account = flags.account;
     if (flags.environment) options.environment = flags.environment;
 

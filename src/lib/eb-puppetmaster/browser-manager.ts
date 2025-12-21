@@ -4,6 +4,7 @@ import { execSync } from "child_process";
 export class BrowserManager {
   private static instance: BrowserManager;
   private browser: puppeteer.Browser | null = null;
+  private currentHeadless: boolean | null = null;
 
   constructor() {
     // Register cleanup handlers for process shutdown
@@ -52,11 +53,38 @@ export class BrowserManager {
     headless: boolean = true,
     args?: string[]
   ): Promise<puppeteer.Browser> {
-    if (!this.browser || this.browser.connected === false) {
+    // Check if browser is truly connected by testing it
+    let needsRelaunch = false;
+    if (!this.browser || !this.browser.connected) {
+      needsRelaunch = true;
+    } else if (this.currentHeadless !== headless) {
+      needsRelaunch = true;
+    } else {
+      // Additional check: try to get browser contexts to verify connection
+      try {
+        await this.browser.version();
+      } catch (error) {
+        needsRelaunch = true;
+      }
+    }
+
+    if (needsRelaunch) {
+      // Close existing browser if it exists
+      if (this.browser) {
+        try {
+          if (this.browser.connected) {
+            await this.browser.close();
+          }
+        } catch (error) {
+          // Ignore errors during close
+        }
+        this.browser = null;
+      }
+      this.currentHeadless = headless;
       try {
         this.browser = await puppeteer.launch({
           headless,
-          args: args || ["--no-sandbox"],
+          args: args || ["--no-sandbox", "--disable-setuid-sandbox"],
         });
       } catch (error) {
         console.log(
@@ -79,6 +107,11 @@ export class BrowserManager {
         }
       }
     }
+
+    if (!this.browser) {
+      throw new Error("Failed to initialize browser");
+    }
+
     return this.browser;
   }
 
@@ -86,6 +119,7 @@ export class BrowserManager {
     if (this.browser) {
       await this.browser.close();
       this.browser = null;
+      this.currentHeadless = null;
     }
   }
 }

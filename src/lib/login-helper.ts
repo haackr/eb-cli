@@ -7,6 +7,7 @@ import type { Account } from "./eb-puppetmaster/index.js";
 interface LoginOptions {
   showBrowser?: boolean;
   username?: string;
+  password?: string;
   account?: string;
   environment?: string;
 }
@@ -60,7 +61,10 @@ export async function promptLoginAndSaveSession(
     });
   }
 
-  const pass = await password({ message: "Enter your password:", mask: "*" });
+  let pass = options.password;
+  if (!pass) {
+    pass = await password({ message: "Enter your password:", mask: "*" });
+  }
 
   const spinner = ora("Logging in to e-Builder...").start();
   let cookies: any[] = [];
@@ -116,7 +120,8 @@ async function accountSpecifier(accounts: eb.Account[]): Promise<Account> {
 }
 
 export async function refreshSessionIfNeeded(
-  sessionId: number
+  sessionId: number,
+  headless: boolean = true
 ): Promise<boolean> {
   const session = db.getSessionById(sessionId) as
     | { environment: string; session_cookies: string }
@@ -126,7 +131,7 @@ export async function refreshSessionIfNeeded(
   const env = eb.getEnvironment(session.environment);
   const cookies = JSON.parse(session.session_cookies);
 
-  const loginCheck = await eb.isLoggedIn(env, true, cookies);
+  const loginCheck = await eb.isLoggedIn(env, headless, cookies);
   if (loginCheck.isLoggedIn) {
     db.updateSessionCookies(sessionId, JSON.stringify(loginCheck.newCookies));
     return true;
