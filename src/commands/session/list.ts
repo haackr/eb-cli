@@ -2,15 +2,7 @@ import { Command, Flags } from "@oclif/core";
 import Table from "cli-table3";
 import * as db from "../../lib/db.js";
 import * as eb from "../../lib/eb-puppetmaster/index.js";
-
-type SessionRow = {
-  id: number;
-  username: string;
-  environment: string;
-  account: string;
-  session_cookies: string;
-  created_at: string;
-};
+import type { SessionRow } from "../../lib/db.js";
 
 export default class SessionList extends Command {
   static override description = "list open e-Builder sessions";

@@ -114,3 +114,22 @@ async function accountSpecifier(accounts: eb.Account[]): Promise<Account> {
   }
   return selectedAccount;
 }
+
+export async function refreshSessionIfNeeded(
+  sessionId: number
+): Promise<boolean> {
+  const session = db.getSessionById(sessionId) as
+    | { environment: string; session_cookies: string }
+    | undefined;
+  if (!session) return false;
+
+  const env = eb.getEnvironment(session.environment);
+  const cookies = JSON.parse(session.session_cookies);
+
+  const loginCheck = await eb.isLoggedIn(env, true, cookies);
+  if (loginCheck.isLoggedIn) {
+    db.updateSessionCookies(sessionId, JSON.stringify(loginCheck.newCookies));
+    return true;
+  }
+  return false;
+}

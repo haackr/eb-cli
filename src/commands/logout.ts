@@ -4,15 +4,7 @@ import { type Cookie } from "puppeteer";
 import ora from "ora";
 import * as eb from "../lib/eb-puppetmaster/index.js";
 import * as db from "../lib/db.js";
-
-type SessionRow = {
-  id: number;
-  username: string;
-  environment: string;
-  account: string;
-  session_cookies: string;
-  created_at: string;
-};
+import type { SessionRow } from "../lib/db.js";
 
 export default class Logout extends Command {
   static override description = "log out of e-Builder sessions";

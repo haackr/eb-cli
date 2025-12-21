@@ -5,16 +5,11 @@ import Papa from "papaparse";
 import ora from "ora";
 import * as eb from "../../lib/eb-puppetmaster/index.js";
 import * as db from "../../lib/db.js";
-import { promptLoginAndSaveSession } from "../../lib/login-helper.js";
-
-type SessionRow = {
-  id: number;
-  username: string;
-  environment: string;
-  account: string;
-  session_cookies: string;
-  created_at: string;
-};
+import type { SessionRow } from "../../lib/db.js";
+import {
+  promptLoginAndSaveSession,
+  refreshSessionIfNeeded,
+} from "../../lib/login-helper.js";
 
 export default class BudgetitemsDelete extends Command {
   static override args = {
@@ -125,12 +120,33 @@ export default class BudgetitemsDelete extends Command {
     // Get environment
     const env = eb.getEnvironment(session.environment);
 
-    const cookies = JSON.parse(session.session_cookies);
+    let cookies = JSON.parse(session.session_cookies);
+
+    // Check and refresh session
+    if (!(await refreshSessionIfNeeded(session.id))) {
+      this.error("Session has expired. Please log in again using 'eb login'.");
+    }
+    // Re-parse cookies after refresh
+    const refreshedSession = db.getSessionById(session.id) as SessionRow;
+    cookies = JSON.parse(refreshedSession.session_cookies);
 
     // Delete each item
     const browser = await eb.BrowserManager.getInstance().getBrowser();
+    let refreshCounter = 0;
     for (const item of items) {
       if (!item.budgetItemId) continue;
+
+      // Refresh session every 10 items
+      if (refreshCounter % 10 === 0) {
+        if (!(await refreshSessionIfNeeded(session.id))) {
+          this.error(
+            "Session has expired during operation. Please log in again using 'eb login'."
+          );
+        }
+        const refreshedSession2 = db.getSessionById(session.id) as SessionRow;
+        cookies = JSON.parse(refreshedSession2.session_cookies);
+      }
+
       const spinner = ora(`Deleting budget item ${item.budgetItemId}`).start();
       try {
         await eb.deleteBudgetItem({
@@ -143,6 +159,7 @@ export default class BudgetitemsDelete extends Command {
       } catch (e: any) {
         spinner.fail(`Failed to delete ${item.budgetItemId}: ${e.message}`);
       }
+      refreshCounter++;
     }
 
     // Close browser

@@ -3,6 +3,15 @@ import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 
+export type SessionRow = {
+  id: number;
+  username: string;
+  environment: string;
+  account: string;
+  session_cookies: string;
+  created_at: string;
+};
+
 const dbDir = path.join(os.homedir(), ".eb-cli");
 const dbPath = path.join(dbDir, "eb.db");
 
@@ -80,6 +89,13 @@ export function updateSessionById(
   session_cookies: string
 ) {
   dbupdateSessionById.run(username, environment, account, session_cookies, id);
+}
+
+const updateSessionCookiesStmt = db.prepare(
+  `UPDATE sessions SET session_cookies = ? WHERE id = ?`
+);
+export function updateSessionCookies(id: number, session_cookies: string) {
+  updateSessionCookiesStmt.run(session_cookies, id);
 }
 
 function resetSequenceIfEmpty() {

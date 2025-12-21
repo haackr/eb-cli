@@ -18,6 +18,11 @@ type deleteBudgetItemArgs = {
   budgetItem: BudgetItem;
 };
 
+const deleteButtonSelector =
+  "#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnDelete";
+const confirmButtonSelector =
+  "ctl00_ctl00_ContentPlaceHolder1_contentSection_btnYesDelete";
+
 export async function deleteBudgetItem(
   options: deleteBudgetItemArgs
 ): Promise<void> {
@@ -32,7 +37,11 @@ export async function deleteBudgetItem(
     await context.setCookie(...cookies);
 
     // Navigate to the budget item page
-    const url = `https://${env}.${baseurl}/budgetitem/${budgetItem.budgetItemId}`;
+    const url = `https://${env}.${baseurl}/da2/Budgets/LineItemDetails.aspx?Mode=Edit&PortalId=${
+      budgetItem.projectId
+    }&LineItemId=${budgetItem.budgetItemId}${
+      budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ""
+    }`;
     await page.goto(url, { waitUntil: "networkidle0" });
 
     // Assume there's a delete button with selector, e.g., button[data-action="delete"]
