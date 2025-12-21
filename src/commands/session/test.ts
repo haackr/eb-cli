@@ -26,6 +26,7 @@ export default class SessionTest extends Command {
       description: "username to test sessions for (tests all if not specified)",
     }),
   };
+  static override aliases: string[] = ["session:clean"];
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SessionTest);
