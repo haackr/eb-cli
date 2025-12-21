@@ -17,7 +17,12 @@ type SessionRow = {
 
 export default class Logout extends Command {
   static override description = "log out of e-Builder sessions";
-  static override examples = ["<%= config.bin %> <%= command.id %>"];
+  static override examples = [
+    "<%= config.bin %> <%= command.id %>",
+    "<%= config.bin %> <%= command.id %> --session-id 1",
+    "<%= config.bin %> <%= command.id %> --username john.doe",
+    "<%= config.bin %> <%= command.id %> --all",
+  ];
   static override flags = {
     show_browser: Flags.boolean({
       char: "s",
@@ -30,11 +35,27 @@ export default class Logout extends Command {
       description: "account (if the user has access to multiple accounts)",
     }),
     all: Flags.boolean({ char: "A", description: "logout from all sessions" }),
+    session_id: Flags.integer({
+      char: "i",
+      description: "session ID to logout from",
+    }),
   };
   static override aliases: string[] = ["session:delete"];
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(Logout);
+
+    if (flags.session_id) {
+      const session = db.getSessionById(flags.session_id) as
+        | SessionRow
+        | undefined;
+      if (!session) {
+        this.log(`No session found with ID ${flags.session_id}.`);
+        return;
+      }
+      await this.logoutSession(session, !flags.show_browser);
+      return;
+    }
 
     let username = flags.username;
     let sessions: SessionRow[] = [];

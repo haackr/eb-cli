@@ -47,6 +47,11 @@ export function getSessionsByUsername(username: string) {
   return getUserSessions.all(username);
 }
 
+const getSessionByIdStmt = db.prepare("SELECT * FROM sessions WHERE id = ?");
+export function getSessionById(id: number) {
+  return getSessionByIdStmt.get(id);
+}
+
 const deleteSessionId = db.prepare("DELETE FROM sessions WHERE id = ?");
 export function deleteSessionById(id: number) {
   deleteSessionId.run(id);
