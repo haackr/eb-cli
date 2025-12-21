@@ -89,7 +89,9 @@ export async function login(
     await page.waitForNetworkIdle();
     const errorMessageBox = await page.$(errorMessageSelector);
     if (errorMessageBox && (await errorMessageBox.isVisible()))
-      throw new Error("Invalid username / password or account is locked");
+      throw new Error(
+        "Invalid username / password or account is locked or user already has maximum sessions open"
+      );
     // await page.waitForNavigation();
 
     if (account) {
