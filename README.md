@@ -1,40 +1,43 @@
 # Usage
 
 <!-- usage -->
+
 ```sh-session
 $ npm install -g eb-cli
 $ eb COMMAND
 running command...
 $ eb (--version)
-eb-cli/1.0.0 darwin-arm64 node-v22.14.0
+eb-cli/0.1.0-alpha.1 darwin-arm64 node-v22.14.0
 $ eb --help [COMMAND]
 USAGE
   $ eb COMMAND
 ...
 ```
+
 <!-- usagestop -->
 
 # Commands
 
 <!-- commands -->
-* [`eb budgetitems delete FILE`](#eb-budgetitems-delete-file)
-* [`eb budgetitems set [FILE]`](#eb-budgetitems-set-file)
-* [`eb login`](#eb-login)
-* [`eb logout`](#eb-logout)
-* [`eb session clean`](#eb-session-clean)
-* [`eb session create`](#eb-session-create)
-* [`eb session delete`](#eb-session-delete)
-* [`eb session list`](#eb-session-list)
-* [`eb session test`](#eb-session-test)
-* [`eb users delete [FILE]`](#eb-users-delete-file)
+
+- [`eb budgetitems delete FILE`](#eb-budgetitems-delete-file)
+- [`eb budgetitems set FILE`](#eb-budgetitems-set-file)
+- [`eb login`](#eb-login)
+- [`eb logout`](#eb-logout)
+- [`eb session clean`](#eb-session-clean)
+- [`eb session create`](#eb-session-create)
+- [`eb session delete`](#eb-session-delete)
+- [`eb session list`](#eb-session-list)
+- [`eb session test`](#eb-session-test)
+- [`eb users delete [FILE]`](#eb-users-delete-file)
 
 ## `eb budgetitems delete FILE`
 
-Delete budget items from a CSV file
+Delete budget items from a CSV
 
 ```
 USAGE
-  $ eb budgetitems delete FILE [--session-id <value>] [-u <value>] [-s]
+  $ eb budgetitems delete FILE [--json] [--session-id <value>] [-u <value>] [-s] [--dry-run]
 
 ARGUMENTS
   FILE  CSV file containing budget item IDs to delete
@@ -42,9 +45,15 @@ ARGUMENTS
 FLAGS
   -s, --show-browser        Show browser window
   -u, --username=<value>    Username to use session for
+      --dry-run             Dry run (no actual deletion)
       --session-id=<value>  Session ID to use
 
+GLOBAL FLAGS
+  --json  Format output as json.
+
 DESCRIPTION
+  Delete budget items from a CSV
+
   Delete budget items from a CSV file
 
 EXAMPLES
@@ -53,26 +62,35 @@ EXAMPLES
   $ eb budgetitems delete items.csv --username myuser
 ```
 
-## `eb budgetitems set [FILE]`
+## `eb budgetitems set FILE`
 
-describe the command here
+Set budget item properties from a CSV
 
 ```
 USAGE
-  $ eb budgetitems set [FILE] [-f] [-n <value>]
+  $ eb budgetitems set FILE [--json] [--session-id <value>] [-u <value>] [-s] [--dry-run]
 
 ARGUMENTS
-  FILE  file to read
+  FILE  CSV file containing budget item properties to set
 
 FLAGS
-  -f, --force
-  -n, --name=<value>  name to print
+  -s, --show-browser        Show browser window
+  -u, --username=<value>    Username to use session for
+      --dry-run             Dry run (no actual changes)
+      --session-id=<value>  Session ID to use
+
+GLOBAL FLAGS
+  --json  Format output as json.
 
 DESCRIPTION
-  describe the command here
+  Set budget item properties from a CSV
+
+  Set properties for budget items from a CSV file
 
 EXAMPLES
-  $ eb budgetitems set
+  $ eb budgetitems set items.csv --session-id 1
+
+  $ eb budgetitems set items.csv --username myuser
 ```
 
 ## `eb login`
@@ -81,12 +99,13 @@ log in to e-Builder
 
 ```
 USAGE
-  $ eb login [-s] [-u <value>] [-a <value>] [-e us1|us2|us3|us4|gov|ca]
+  $ eb login [-s] [-u <value>] [-p <value>] [-a <value>] [-e us1|us2|us3|us4|gov|ca]
 
 FLAGS
   -a, --account=<value>       account (if the user has access to multiple accounts)
   -e, --environment=<option>  environment
                               <options: us1|us2|us3|us4|gov|ca>
+  -p, --password=<value>      password
   -s, --show_browser          show browser window (useful for debugging; default is headless)
   -u, --username=<value>      username
 
@@ -163,12 +182,13 @@ log in to e-Builder
 
 ```
 USAGE
-  $ eb session create [-s] [-u <value>] [-a <value>] [-e us1|us2|us3|us4|gov|ca]
+  $ eb session create [-s] [-u <value>] [-p <value>] [-a <value>] [-e us1|us2|us3|us4|gov|ca]
 
 FLAGS
   -a, --account=<value>       account (if the user has access to multiple accounts)
   -e, --environment=<option>  environment
                               <options: us1|us2|us3|us4|gov|ca>
+  -p, --password=<value>      password
   -s, --show_browser          show browser window (useful for debugging; default is headless)
   -u, --username=<value>      username
 
@@ -219,11 +239,13 @@ list open e-Builder sessions
 
 ```
 USAGE
-  $ eb session list [-u <value>] [--json]
+  $ eb session list [--json] [-u <value>]
 
 FLAGS
   -u, --username=<value>  username to filter sessions by
-      --json              output sessions as JSON
+
+GLOBAL FLAGS
+  --json  Format output as json.
 
 DESCRIPTION
   list open e-Builder sessions
@@ -271,7 +293,7 @@ USAGE
   $ eb users delete [FILE] [-f] [-n <value>]
 
 ARGUMENTS
-  FILE  file to read
+  [FILE]  file to read
 
 FLAGS
   -f, --force
@@ -283,12 +305,14 @@ DESCRIPTION
 EXAMPLES
   $ eb users delete
 ```
+
 <!-- commandsstop -->
 
 # Table of contents
 
 <!-- toc -->
-* [Usage](#usage)
-* [Commands](#commands)
-* [Table of contents](#table-of-contents)
+
+- [Usage](#usage)
+- [Commands](#commands)
+- [Table of contents](#table-of-contents)
 <!-- tocstop -->
