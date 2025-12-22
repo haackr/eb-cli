@@ -6,7 +6,12 @@
   "scripts": {
     "dev": "./bin/dev.js",
     "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint --ext .ts src",
+    "lint:fix": "eslint --ext .ts src --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "simple-git-hooks"
   },
   "keywords": [],
   "author": "",
@@ -25,6 +30,7 @@
   "dependencies": {
     "@inquirer/prompts": "^8.1.0",
     "@oclif/core": "^4.8.0",
+    "@oclif/table": "^0.5.1",
     "@types/papaparse": "^5.5.2",
     "better-sqlite3": "^12.5.0",
     "cli-table3": "^0.6.5",
@@ -33,9 +39,32 @@
     "puppeteer": "^24.34.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.3",
+    "@eslint/js": "^9.39.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.9.2",
+    "@typescript-eslint/eslint-plugin": "^8.50.1",
+    "@typescript-eslint/parser": "^8.50.1",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-prettier": "^5.5.4",
+    "lint-staged": "^15.5.2",
+    "prettier": "^3.7.4",
+    "simple-git-hooks": "^2.13.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.50.1"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec lint-staged"
+  },
+  "lint-staged": {
+    "**/*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "**/*.{js,json,md}": [
+      "prettier --write"
+    ]
   }
 }

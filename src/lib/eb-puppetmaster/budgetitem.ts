@@ -1,5 +1,5 @@
-import puppeteer from "puppeteer";
-import { Environment, baseurl, BrowserManager } from "./index.js";
+import puppeteer from 'puppeteer';
+import { Environment, baseurl, BrowserManager } from './index.js';
 
 export type BudgetItem = {
   budgetItemId: string;
@@ -20,32 +20,24 @@ type deleteBudgetItemArgs = {
   dryRun: boolean;
 };
 
-const deleteButtonSelector =
-  "#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnDelete";
-const confirmButtonSelector =
-  "#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnYesDelete";
-const allowChargesSelector =
-  "#ctl00_ctl00_ContentPlaceHolder1_contentSection_chkAllowCharges";
+const deleteButtonSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnDelete';
+const confirmButtonSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnYesDelete';
+const allowChargesSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_chkAllowCharges';
 const approvalRequiredForChangeSelector =
-  "#ctl00_ctl00_ContentPlaceHolder1_contentSection_chkAppReq";
-const descriptionSelector =
-  "#ctl00_ctl00_ContentPlaceHolder1_contentSection_tbDescription";
-const saveButtonSelector =
-  "#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnSave";
+  '#ctl00_ctl00_ContentPlaceHolder1_contentSection_chkAppReq';
+const descriptionSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_tbDescription';
+const saveButtonSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnSave';
 
-export async function deleteBudgetItem(
-  options: deleteBudgetItemArgs
-): Promise<void> {
+export async function deleteBudgetItem(options: deleteBudgetItemArgs): Promise<void> {
   const { env, cookies, browser, budgetItem, dryRun = false } = options;
-  const browserInstance =
-    browser || (await BrowserManager.getInstance().getBrowser());
+  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   let page: puppeteer.Page | null = null;
 
   try {
     // Check if browser is still connected
     if (!browserInstance.connected) {
-      throw new Error("Browser is not connected");
+      throw new Error('Browser is not connected');
     }
 
     // Use default context instead of creating a new one
@@ -64,9 +56,9 @@ export async function deleteBudgetItem(
     const url = `https://${env}.${baseurl}/da2/Cost/Budgets/LineItemDetails.aspx?Mode=Edit&PortalID=${
       budgetItem.projectId
     }&BudgetLineItemId=${budgetItem.budgetItemId}${
-      budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ""
+      budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ''
     }`;
-    await page.goto(url, { waitUntil: "networkidle0" });
+    await page.goto(url, { waitUntil: 'networkidle0' });
 
     const deleteButton = await page.$(deleteButtonSelector);
     if (deleteButton) {
@@ -77,16 +69,16 @@ export async function deleteBudgetItem(
       if (confirmButton && !dryRun) {
         await confirmButton.click();
         // Wait for deletion to complete
-        await page.waitForNavigation({ waitUntil: "networkidle0" });
+        await page.waitForNavigation({ waitUntil: 'networkidle0' });
       }
     } else {
-      throw new Error("Delete button not found");
+      throw new Error('Delete button not found');
     }
   } finally {
     if (page) {
       try {
         await page.close();
-      } catch (error) {
+      } catch {
         // Ignore errors during page close
       }
     }
@@ -101,12 +93,9 @@ type SetBudgetItemPropertiesArgs = {
   dryRun?: boolean;
 };
 
-export async function setBudgetItemProperties(
-  options: SetBudgetItemPropertiesArgs
-): Promise<void> {
+export async function setBudgetItemProperties(options: SetBudgetItemPropertiesArgs): Promise<void> {
   const { env, cookies, browser, budgetItem, dryRun = false } = options;
-  const browserInstance =
-    browser || (await BrowserManager.getInstance().getBrowser());
+  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
   let page: puppeteer.Page | null = null;
   try {
     const context = browserInstance.defaultBrowserContext();
@@ -115,19 +104,16 @@ export async function setBudgetItemProperties(
     const url = `https://${env}.${baseurl}/da2/Cost/Budgets/AddEditLineItem.aspx?PortalId=${
       budgetItem.projectId
     }&BudgetLineItemId=${budgetItem.budgetItemId}${
-      budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ""
+      budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ''
     }&mode=Edit`;
-    await page.goto(url, { waitUntil: "networkidle0" });
+    await page.goto(url, { waitUntil: 'networkidle0' });
 
     // Set properties
     if (budgetItem.allowCharges !== undefined) {
-      const allowChargesCheckbox = await page.waitForSelector(
-        allowChargesSelector
-      );
-      if (!allowChargesCheckbox)
-        throw new Error("Allow Charges checkbox not found");
+      const allowChargesCheckbox = await page.waitForSelector(allowChargesSelector);
+      if (!allowChargesCheckbox) throw new Error('Allow Charges checkbox not found');
       const allowChargesChecked = await (
-        await allowChargesCheckbox?.getProperty("checked")
+        await allowChargesCheckbox?.getProperty('checked')
       ).jsonValue();
       if (allowChargesChecked !== budgetItem.allowCharges) {
         await allowChargesCheckbox.click();
@@ -135,14 +121,9 @@ export async function setBudgetItemProperties(
     }
 
     if (budgetItem.approvalRequiredForChange !== undefined) {
-      const approvalCheckbox = await page.waitForSelector(
-        approvalRequiredForChangeSelector
-      );
-      if (!approvalCheckbox)
-        throw new Error("Approval Required for Change checkbox not found");
-      const approvalChecked = await (
-        await approvalCheckbox?.getProperty("checked")
-      ).jsonValue();
+      const approvalCheckbox = await page.waitForSelector(approvalRequiredForChangeSelector);
+      if (!approvalCheckbox) throw new Error('Approval Required for Change checkbox not found');
+      const approvalChecked = await (await approvalCheckbox?.getProperty('checked')).jsonValue();
       if (approvalChecked !== budgetItem.approvalRequiredForChange) {
         await approvalCheckbox.click();
       }
@@ -150,22 +131,22 @@ export async function setBudgetItemProperties(
 
     if (budgetItem.description) {
       const descriptionInput = await page.waitForSelector(descriptionSelector);
-      if (!descriptionInput) throw new Error("Description input not found");
+      if (!descriptionInput) throw new Error('Description input not found');
       await page.$eval(
         descriptionSelector,
         (el, value) => {
-          el.value = value;
+          (el as HTMLInputElement).value = String(value ?? '');
         },
-        budgetItem.description
+        budgetItem.description,
       );
     }
     await page.waitForNetworkIdle();
     // Save changes
     if (!dryRun) {
       const saveButton = await page.$(saveButtonSelector);
-      if (!saveButton) throw new Error("Save button not found");
+      if (!saveButton) throw new Error('Save button not found');
       await saveButton.click();
-      await page.waitForNavigation({ waitUntil: "networkidle0" });
+      await page.waitForNavigation({ waitUntil: 'networkidle0' });
     }
   } finally {
     if (page) {

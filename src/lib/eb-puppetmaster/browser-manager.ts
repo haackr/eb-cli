@@ -1,5 +1,5 @@
-import puppeteer from "puppeteer";
-import { execSync } from "child_process";
+import puppeteer from 'puppeteer';
+import { execSync } from 'child_process';
 
 export class BrowserManager {
   private static instance: BrowserManager;
@@ -12,31 +12,31 @@ export class BrowserManager {
       await this.closeBrowser();
     };
 
-    process.on("exit", () => {
+    process.on('exit', () => {
       // Synchronous cleanup for exit
       if (this.browser) {
         this.browser.close().catch(console.error);
       }
     });
 
-    process.on("SIGINT", async () => {
+    process.on('SIGINT', async () => {
       await cleanup();
       process.exit();
     });
 
-    process.on("SIGTERM", async () => {
+    process.on('SIGTERM', async () => {
       await cleanup();
       process.exit();
     });
 
-    process.on("uncaughtException", async (err) => {
-      console.error("Uncaught Exception:", err);
+    process.on('uncaughtException', async (err) => {
+      console.error('Uncaught Exception:', err);
       await cleanup();
       process.exit(1);
     });
 
-    process.on("unhandledRejection", async (reason, promise) => {
-      console.error("Unhandled Rejection at:", promise, "reason:", reason);
+    process.on('unhandledRejection', async (reason, promise) => {
+      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
       await cleanup();
       process.exit(1);
     });
@@ -49,10 +49,7 @@ export class BrowserManager {
     return BrowserManager.instance;
   }
 
-  async getBrowser(
-    headless: boolean = true,
-    args?: string[]
-  ): Promise<puppeteer.Browser> {
+  async getBrowser(headless: boolean = true, args?: string[]): Promise<puppeteer.Browser> {
     // Check if browser is truly connected by testing it
     let needsRelaunch = false;
     if (!this.browser || !this.browser.connected) {
@@ -63,7 +60,7 @@ export class BrowserManager {
       // Additional check: try to get browser contexts to verify connection
       try {
         await this.browser.version();
-      } catch (error) {
+      } catch {
         needsRelaunch = true;
       }
     }
@@ -75,7 +72,7 @@ export class BrowserManager {
           if (this.browser.connected) {
             await this.browser.close();
           }
-        } catch (error) {
+        } catch {
           // Ignore errors during close
         }
         this.browser = null;
@@ -84,32 +81,30 @@ export class BrowserManager {
       try {
         this.browser = await puppeteer.launch({
           headless,
-          args: args || ["--no-sandbox", "--disable-setuid-sandbox"],
+          args: args || ['--no-sandbox', '--disable-setuid-sandbox'],
         });
-      } catch (error) {
+      } catch {
         console.log(
-          "Puppeteer failed to launch browser. Attempting to install Chrome dependencies..."
+          'Puppeteer failed to launch browser. Attempting to install Chrome dependencies...',
         );
         // Run the install command
-        execSync("npx puppeteer browsers install chrome --install-deps", {
-          stdio: "inherit",
+        execSync('npx puppeteer browsers install chrome --install-deps', {
+          stdio: 'inherit',
         });
         // Retry launch
         try {
           this.browser = await puppeteer.launch({
             headless,
-            args: args || ["--no-sandbox"],
+            args: args || ['--no-sandbox'],
           });
         } catch (retryError) {
-          throw new Error(
-            `Failed to launch browser after installing dependencies: ${retryError}`
-          );
+          throw new Error(`Failed to launch browser after installing dependencies: ${retryError}`);
         }
       }
     }
 
     if (!this.browser) {
-      throw new Error("Failed to initialize browser");
+      throw new Error('Failed to initialize browser');
     }
 
     return this.browser;

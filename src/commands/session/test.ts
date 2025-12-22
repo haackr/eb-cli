@@ -1,29 +1,29 @@
-import { Command, Flags } from "@oclif/core";
-import puppeteer, { type Cookie } from "puppeteer";
-import ora from "ora";
-import * as eb from "../../lib/eb-puppetmaster/index.js";
-import * as db from "../../lib/db.js";
-import type { SessionRow } from "../../lib/db.js";
+import { Command, Flags } from '@oclif/core';
+import type { Cookie } from 'puppeteer';
+import ora from 'ora';
+import * as eb from '../../lib/eb-puppetmaster/index.js';
+import * as db from '../../lib/db.js';
+import type { SessionRow } from '../../lib/db.js';
 
 export default class SessionTest extends Command {
   static override description =
-    "test e-Builder sessions, refresh valid ones, and remove invalid ones";
+    'test e-Builder sessions, refresh valid ones, and remove invalid ones';
   static override examples = [
-    "<%= config.bin %> <%= command.id %>",
-    "<%= config.bin %> <%= command.id %> --username myuser",
-    "<%= config.bin %> <%= command.id %> --show-browser",
+    '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --username myuser',
+    '<%= config.bin %> <%= command.id %> --show-browser',
   ];
   static override flags = {
     username: Flags.string({
-      char: "u",
-      description: "username to test sessions for (tests all if not specified)",
+      char: 'u',
+      description: 'username to test sessions for (tests all if not specified)',
     }),
     show_browser: Flags.boolean({
-      char: "s",
-      description: "show browser window during testing",
+      char: 's',
+      description: 'show browser window during testing',
     }),
   };
-  static override aliases: string[] = ["session:clean"];
+  static override aliases: string[] = ['session:clean'];
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SessionTest);
@@ -36,7 +36,7 @@ export default class SessionTest extends Command {
     }
 
     if (sessions.length === 0) {
-      this.log("No sessions found to test.");
+      this.log('No sessions found to test.');
       return;
     }
 
@@ -47,8 +47,8 @@ export default class SessionTest extends Command {
     for (const session of sessions) {
       const spinner = ora(
         `Testing session for ${session.username} (${eb.getDisplayName(
-          session.environment
-        )}/${session.account})`
+          session.environment,
+        )}/${session.account})`,
       ).start();
 
       const env = eb.getEnvironment(session.environment);
@@ -56,11 +56,7 @@ export default class SessionTest extends Command {
       const cookies: Cookie[] = JSON.parse(session.session_cookies);
 
       try {
-        const { isLoggedIn, newCookies } = await eb.isLoggedIn(
-          env,
-          !flags.show_browser,
-          cookies
-        );
+        const { isLoggedIn, newCookies } = await eb.isLoggedIn(env, !flags.show_browser, cookies);
         if (isLoggedIn) {
           // Update session with new cookies
           db.updateSessionById(
@@ -68,7 +64,7 @@ export default class SessionTest extends Command {
             session.username,
             session.environment,
             session.account,
-            JSON.stringify(newCookies)
+            JSON.stringify(newCookies),
           );
           spinner.succeed(`Session valid and refreshed`);
         } else {
@@ -87,12 +83,12 @@ export default class SessionTest extends Command {
         db.deleteSessionById(session.id);
         this.log(
           `Removed session: ${session.username} (${eb.getDisplayName(
-            session.environment
-          )}/${session.account})`
+            session.environment,
+          )}/${session.account})`,
         );
       }
     } else {
-      this.log("\nAll sessions are valid.");
+      this.log('\nAll sessions are valid.');
     }
 
     // Close the browser to allow the process to exit

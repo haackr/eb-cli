@@ -1,7 +1,7 @@
-import Database from "better-sqlite3";
-import * as os from "os";
-import * as path from "path";
-import * as fs from "fs";
+import Database from 'better-sqlite3';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
 
 export type SessionRow = {
   id: number;
@@ -12,8 +12,8 @@ export type SessionRow = {
   created_at: string;
 };
 
-const dbDir = path.join(os.homedir(), ".eb-cli");
-const dbPath = path.join(dbDir, "eb.db");
+const dbDir = path.join(os.homedir(), '.eb-cli');
+const dbPath = path.join(dbDir, 'eb.db');
 
 // Ensure the directory exists
 if (!fs.existsSync(dbDir)) {
@@ -44,62 +44,58 @@ export function addSession(
   username: string,
   environment: string,
   account: string,
-  session_cookies: string
+  session_cookies: string,
 ) {
   insertSession.run(username, environment, account, session_cookies);
 }
 
-const getAllSessions = db.prepare("SELECT * FROM sessions");
+const getAllSessions = db.prepare('SELECT * FROM sessions');
 export function getSessions() {
   return getAllSessions.all();
 }
 
-const getUserSessions = db.prepare("SELECT * FROM sessions WHERE username = ?");
+const getUserSessions = db.prepare('SELECT * FROM sessions WHERE username = ?');
 export function getSessionsByUsername(username: string) {
   return getUserSessions.all(username);
 }
 
-const getSessionByIdStmt = db.prepare("SELECT * FROM sessions WHERE id = ?");
+const getSessionByIdStmt = db.prepare('SELECT * FROM sessions WHERE id = ?');
 export function getSessionById(id: number) {
   return getSessionByIdStmt.get(id);
 }
 
-const deleteSessionId = db.prepare("DELETE FROM sessions WHERE id = ?");
+const deleteSessionId = db.prepare('DELETE FROM sessions WHERE id = ?');
 export function deleteSessionById(id: number) {
   deleteSessionId.run(id);
   resetSequenceIfEmpty();
 }
 
-const deleteUserSessions = db.prepare(
-  "DELETE FROM sessions WHERE username = ?"
-);
+const deleteUserSessions = db.prepare('DELETE FROM sessions WHERE username = ?');
 export function deleteSessionsByUsername(username: string) {
   deleteUserSessions.run(username);
   resetSequenceIfEmpty();
 }
 
 const dbupdateSessionById = db.prepare(
-  `UPDATE sessions SET username = ?, environment = ?, account = ?, session_cookies = ? WHERE id = ?`
+  `UPDATE sessions SET username = ?, environment = ?, account = ?, session_cookies = ? WHERE id = ?`,
 );
 export function updateSessionById(
   id: number,
   username: string,
   environment: string,
   account: string,
-  session_cookies: string
+  session_cookies: string,
 ) {
   dbupdateSessionById.run(username, environment, account, session_cookies, id);
 }
 
-const updateSessionCookiesStmt = db.prepare(
-  `UPDATE sessions SET session_cookies = ? WHERE id = ?`
-);
+const updateSessionCookiesStmt = db.prepare(`UPDATE sessions SET session_cookies = ? WHERE id = ?`);
 export function updateSessionCookies(id: number, session_cookies: string) {
   updateSessionCookiesStmt.run(session_cookies, id);
 }
 
 function resetSequenceIfEmpty() {
-  const count = db.prepare("SELECT COUNT(*) as count FROM sessions").get() as {
+  const count = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as {
     count: number;
   };
   if (count.count === 0) {

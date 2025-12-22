@@ -1,50 +1,56 @@
-import { Args, Command, Flags } from "@oclif/core";
-import { select } from "@inquirer/prompts";
-import * as fs from "fs";
-import Papa from "papaparse";
-import ora from "ora";
-import * as eb from "../../lib/eb-puppetmaster/index.js";
-import * as db from "../../lib/db.js";
-import type { SessionRow } from "../../lib/db.js";
-import {
-  promptLoginAndSaveSession,
-  refreshSessionIfNeeded,
-} from "../../lib/login-helper.js";
+import { Args, Command, Flags } from '@oclif/core';
+import { select } from '@inquirer/prompts';
+import * as fs from 'fs';
+import Papa from 'papaparse';
+import ora from 'ora';
+import * as eb from '../../lib/eb-puppetmaster/index.js';
+import * as db from '../../lib/db.js';
+import type { SessionRow } from '../../lib/db.js';
+import { promptLoginAndSaveSession, refreshSessionIfNeeded } from '../../lib/login-helper.js';
 
 export default class BudgetitemsDelete extends Command {
+  static override summary = 'Delete budget items from a CSV';
   static override args = {
     file: Args.string({
-      description: "CSV file containing budget item IDs to delete",
+      description: 'CSV file containing budget item IDs to delete',
       required: true,
+      // Validate the file exists early
+      parse: async (input) => {
+        if (!fs.existsSync(input)) {
+          throw new Error(`File not found: ${input}`);
+        }
+        return input;
+      },
     }),
   };
-  static override description = "Delete budget items from a CSV file";
+  static override description = 'Delete budget items from a CSV file';
   static override examples = [
-    "<%= config.bin %> <%= command.id %> items.csv --session-id 1",
-    "<%= config.bin %> <%= command.id %> items.csv --username myuser",
+    'eb budgetitems delete items.csv --session-id 1',
+    'eb budgetitems delete items.csv --username myuser',
   ];
+  static override enableJsonFlag = true;
   static override flags = {
-    "session-id": Flags.integer({ description: "Session ID to use" }),
+    'session-id': Flags.integer({ description: 'Session ID to use' }),
     username: Flags.string({
-      char: "u",
-      description: "Username to use session for",
+      char: 'u',
+      description: 'Username to use session for',
     }),
-    show_browser: Flags.boolean({
-      char: "s",
-      description: "Show browser window",
+    'show-browser': Flags.boolean({
+      char: 's',
+      description: 'Show browser window',
     }),
-    "dry-run": Flags.boolean({ description: "Dry run (no actual deletion)" }),
+    'dry-run': Flags.boolean({ description: 'Dry run (no actual deletion)' }),
   };
 
-  public async run(): Promise<void> {
+  public async run(): Promise<any> {
     const { args, flags } = await this.parse(BudgetitemsDelete);
 
     // Get session
     let session: SessionRow | undefined;
-    if (flags["session-id"]) {
-      session = db.getSessionById(flags["session-id"]) as SessionRow;
+    if (flags['session-id']) {
+      session = db.getSessionById(flags['session-id']) as SessionRow;
       if (!session) {
-        this.error(`Session with ID ${flags["session-id"]} not found.`);
+        this.error(`Session with ID ${flags['session-id']} not found.`);
       }
     } else if (flags.username) {
       const sessions = db.getSessionsByUsername(flags.username) as SessionRow[];
@@ -61,7 +67,7 @@ export default class BudgetitemsDelete extends Command {
           value: s,
         }));
         session = await select({
-          message: "Select a session:",
+          message: 'Select a session:',
           choices,
         });
       }
@@ -70,8 +76,8 @@ export default class BudgetitemsDelete extends Command {
       const allSessions = db.getSessions() as SessionRow[];
       if (allSessions.length === 0) {
         // No sessions, prompt to login
-        this.log("No open sessions found. Please log in first.");
-        await promptLoginAndSaveSession({ showBrowser: flags.show_browser });
+        this.log('No open sessions found. Please log in first.');
+        await promptLoginAndSaveSession({ showBrowser: flags['show-browser'] });
         // After login, get the new session
         const newSessions = db.getSessions() as SessionRow[];
         if (newSessions.length === 1) {
@@ -85,7 +91,7 @@ export default class BudgetitemsDelete extends Command {
             value: s,
           }));
           session = await select({
-            message: "Select a session:",
+            message: 'Select a session:',
             choices,
           });
         }
@@ -94,27 +100,27 @@ export default class BudgetitemsDelete extends Command {
       } else {
         // Prompt to select
         const choices = allSessions.map((s) => ({
-          name: `${s.username} (${s.environment}/${s.account}) - ${s.created_at}`,
+          name: `${s.username} (${eb.getDisplayName(s.environment)}/${
+            s.account
+          }) - ${s.created_at}`,
           value: s,
         }));
         session = await select({
-          message: "Select a session:",
+          message: 'Select a session:',
           choices,
         });
       }
     }
 
     if (!session) {
-      this.error("No session selected.");
+      this.error('No session selected.');
     }
 
     // Parse CSV
-    const csvData = fs.readFileSync(args.file, "utf8");
+    const csvData = fs.readFileSync(args.file, 'utf8');
     const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
     if (parsed.errors.length > 0) {
-      this.error(
-        `CSV parsing errors: ${parsed.errors.map((e) => e.message).join(", ")}`
-      );
+      this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
     }
     const items = parsed.data as {
       portalId: string;
@@ -130,7 +136,7 @@ export default class BudgetitemsDelete extends Command {
     let cookies = JSON.parse(session.session_cookies);
 
     // Check and refresh session
-    if (!(await refreshSessionIfNeeded(session.id, !flags.show_browser))) {
+    if (!(await refreshSessionIfNeeded(session.id, !flags['show-browser']))) {
       this.error("Session has expired. Please log in again using 'eb login'.");
     }
     // Re-parse cookies after refresh
@@ -139,20 +145,27 @@ export default class BudgetitemsDelete extends Command {
 
     // Delete each item
     const browser = await eb.BrowserManager.getInstance().getBrowser(
-      !flags.show_browser,
-      !flags.show_browser ? ["--window-size=1200,800"] : undefined
+      !flags['show-browser'],
+      !flags['show-browser'] ? ['--window-size=1200,800'] : undefined,
     );
 
+    const results: Array<{
+      itemId: string;
+      projectName?: string;
+      accountCode?: string;
+      status: 'success' | 'failed';
+      message?: string;
+    }> = [];
+    let deletedCount = 0;
+    let failedCount = 0;
     let refreshCounter = 0;
     for (const item of items) {
       if (!item.itemId) continue;
 
       // Refresh session every 10 items
       if (refreshCounter % 10 === 0) {
-        if (!(await refreshSessionIfNeeded(session.id, !flags.show_browser))) {
-          this.error(
-            "Session has expired during operation. Please log in again using 'eb login'."
-          );
+        if (!(await refreshSessionIfNeeded(session.id, !flags['show-browser']))) {
+          this.error("Session has expired during operation. Please log in again using 'eb login'.");
         }
         const refreshedSession2 = db.getSessionById(session.id) as SessionRow;
         cookies = JSON.parse(refreshedSession2.session_cookies);
@@ -160,8 +173,8 @@ export default class BudgetitemsDelete extends Command {
 
       const spinner = ora(
         `Deleting budget item ${item.itemId}${
-          item.projectName ? ` - ${item.projectName}` : ""
-        }${item.accountCode ? ` - ${item.accountCode}` : ""}`
+          item.projectName ? ` - ${item.projectName}` : ''
+        }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
       ).start();
       try {
         await eb.deleteBudgetItem({
@@ -173,24 +186,54 @@ export default class BudgetitemsDelete extends Command {
             projectId: item.portalId,
             ...(item.budgetId && { budgetId: item.budgetId }),
           },
-          dryRun: flags["dry-run"],
+          dryRun: flags['dry-run'],
         });
         spinner.succeed(
           `Deleted budget item ${item.itemId}${
-            item.projectName ? ` - ${item.projectName}` : ""
-          }${item.accountCode ? ` - ${item.accountCode}` : ""}`
+            item.projectName ? ` - ${item.projectName}` : ''
+          }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
         );
+        results.push({
+          itemId: item.itemId,
+          status: 'success',
+          ...(item.projectName ? { projectName: item.projectName } : {}),
+          ...(item.accountCode ? { accountCode: item.accountCode } : {}),
+        });
+        deletedCount++;
       } catch (e: any) {
         spinner.fail(
           `Failed to delete ${item.itemId}${
-            item.projectName ? ` - ${item.projectName}` : ""
-          }${item.accountCode ? ` - ${item.accountCode}` : ""}: ${e.message}`
+            item.projectName ? ` - ${item.projectName}` : ''
+          }${item.accountCode ? ` - ${item.accountCode}` : ''}: ${e.message}`,
         );
+        results.push({
+          itemId: item.itemId,
+          status: 'failed',
+          ...(item.projectName ? { projectName: item.projectName } : {}),
+          ...(item.accountCode ? { accountCode: item.accountCode } : {}),
+          message: String(e?.message ?? ''),
+        });
+        failedCount++;
       }
       refreshCounter++;
     }
 
     // Close browser
     await eb.BrowserManager.getInstance().closeBrowser();
+
+    // Output summary or JSON
+    if (this.jsonEnabled()) {
+      return {
+        deletedCount,
+        failedCount,
+        dryRun: Boolean(flags['dry-run']),
+        results,
+      };
+    }
+    this.log(
+      `Completed. Deleted: ${deletedCount}, Failed: ${failedCount}, Dry run: ${Boolean(
+        flags['dry-run'],
+      )}`,
+    );
   }
 }
