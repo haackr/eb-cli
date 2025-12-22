@@ -93,7 +93,7 @@ export async function login(
       await page.waitForNavigation();
     } else {
       const accountSelector = await page.$(selectAccountSelector);
-      if (accountSelector && headless) {
+      if (accountSelector) {
         const accountOpttions = await page.$$(
           selectAccountSelector + " option"
         );
