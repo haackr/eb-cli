@@ -158,7 +158,11 @@ export default class BudgetitemsDelete extends Command {
         cookies = JSON.parse(refreshedSession2.session_cookies);
       }
 
-      const spinner = ora(`Deleting budget item ${item.itemId}`).start();
+      const spinner = ora(
+        `Deleting budget item ${item.itemId}${
+          item.projectName ? ` - ${item.projectName}` : ""
+        }${item.accountCode ? ` - ${item.accountCode}` : ""}`
+      ).start();
       try {
         await eb.deleteBudgetItem({
           env,
@@ -171,9 +175,17 @@ export default class BudgetitemsDelete extends Command {
           },
           dryRun: flags["dry-run"],
         });
-        spinner.succeed(`Deleted budget item ${item.itemId}`);
+        spinner.succeed(
+          `Deleted budget item ${item.itemId}${
+            item.projectName ? ` - ${item.projectName}` : ""
+          }${item.accountCode ? ` - ${item.accountCode}` : ""}`
+        );
       } catch (e: any) {
-        spinner.fail(`Failed to delete ${item.itemId}: ${e.message}`);
+        spinner.fail(
+          `Failed to delete ${item.itemId}${
+            item.projectName ? ` - ${item.projectName}` : ""
+          }${item.accountCode ? ` - ${item.accountCode}` : ""}: ${e.message}`
+        );
       }
       refreshCounter++;
     }

@@ -163,7 +163,9 @@ export default class BudgetitemsSet extends Command {
       }
 
       const spinner = ora(
-        `Setting properties for budget item ${item.itemId}`
+        `Setting properties for budget item ${item.itemId}${
+          item.projectName ? ` - ${item.projectName}` : ""
+        }${item.accountCode ? ` - ${item.accountCode}` : ""}`
       ).start();
       try {
         await eb.setBudgetItemProperties({
@@ -187,10 +189,16 @@ export default class BudgetitemsSet extends Command {
           },
           dryRun: flags["dry-run"],
         });
-        spinner.succeed(`Set properties for budget item ${item.itemId}`);
+        spinner.succeed(
+          `Set properties for budget item ${item.itemId}${
+            item.projectName ? ` - ${item.projectName}` : ""
+          }${item.accountCode ? ` - ${item.accountCode}` : ""}`
+        );
       } catch (e: any) {
         spinner.fail(
-          `Failed to set properties for ${item.itemId}: ${e.message}`
+          `Failed to set properties for ${item.itemId}${
+            item.projectName ? ` - ${item.projectName}` : ""
+          }${item.accountCode ? ` - ${item.accountCode}` : ""}: ${e.message}`
         );
       }
       refreshCounter++;
