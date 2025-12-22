@@ -22,7 +22,7 @@ type deleteBudgetItemArgs = {
 const deleteButtonSelector =
   "#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnDelete";
 const confirmButtonSelector =
-  "ctl00_ctl00_ContentPlaceHolder1_contentSection_btnYesDelete";
+  "#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnYesDelete";
 
 export async function deleteBudgetItem(
   options: deleteBudgetItemArgs
@@ -61,13 +61,12 @@ export async function deleteBudgetItem(
 
     // Assume there's a delete button with selector, e.g., button[data-action="delete"]
     // This is a placeholder; actual implementation needs to match e-Builder's UI
-    const deleteButton = await page.waitForSelector(deleteButtonSelector);
+    const deleteButton = await page.$(deleteButtonSelector);
     if (deleteButton) {
       await deleteButton.click();
+      await page.waitForNavigation();
       // Wait for confirmation dialog and confirm
-      const confirmButton = await page.waitForSelector(confirmButtonSelector, {
-        visible: true,
-      });
+      const confirmButton = await page.waitForSelector(confirmButtonSelector);
       if (confirmButton && !dryRun) {
         await confirmButton.click();
         // Wait for deletion to complete
