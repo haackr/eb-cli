@@ -3,6 +3,7 @@ import { select } from '@inquirer/prompts';
 import * as fs from 'fs';
 import Papa from 'papaparse';
 import ora from 'ora';
+import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import * as db from '../../lib/db.js';
 import type { SessionRow } from '../../lib/db.js';
@@ -40,6 +41,14 @@ export default class BudgetitemsDelete extends Command {
       description: 'Show browser window',
     }),
     'dry-run': Flags.boolean({ description: 'Dry run (no actual deletion)' }),
+    verbose: Flags.boolean({
+      char: 'v',
+      description: 'Show detailed progress for each item instead of overall progress bar',
+    }),
+    'output-csv': Flags.string({
+      char: 'o',
+      description: 'Write operation results to a CSV file at this path',
+    }),
   };
 
   public async run(): Promise<any> {
@@ -151,6 +160,8 @@ export default class BudgetitemsDelete extends Command {
 
     const results: Array<{
       itemId: string;
+      portalId?: string;
+      budgetId?: string;
       projectName?: string;
       accountCode?: string;
       status: 'success' | 'failed';
@@ -159,23 +170,138 @@ export default class BudgetitemsDelete extends Command {
     let deletedCount = 0;
     let failedCount = 0;
     let refreshCounter = 0;
+
+    // Create progress bar for non-verbose mode (but not in JSON mode)
+    const progressBar =
+      !flags.verbose && !this.jsonEnabled()
+        ? new cliProgress.SingleBar(
+            {
+              format:
+                'Deleting items [{bar}] {percentage}% | {value}/{total} items | Success: {success} | Failed: {failed}',
+              hideCursor: true,
+              clearOnComplete: true,
+            },
+            cliProgress.Presets.shades_classic,
+          )
+        : null;
+
+    if (progressBar) {
+      progressBar.start(items.length, 0, { success: 0, failed: 0 });
+    }
+
+    // Track current spinner to stop cleanly on interrupt
+    let currentSpinner: ReturnType<typeof ora> | null = null;
+    let wroteCsv = false;
+    let shouldStop = false;
+    let interrupted = false;
+
+    // Graceful interrupt: write partial CSV/JSON and cleanup
+    const handleInterrupt = async (): Promise<void> => {
+      try {
+        interrupted = true;
+        shouldStop = true;
+        if (progressBar) progressBar.stop();
+        if (currentSpinner) {
+          currentSpinner.stop();
+          currentSpinner = null;
+        }
+        // Attempt to close browser
+        try {
+          await eb.BrowserManager.getInstance().closeBrowser();
+        } catch {}
+
+        // Optionally write partial results to CSV
+        if (flags['output-csv'] && !wroteCsv) {
+          const rows = results.map((r) => ({
+            portalId: r.portalId ?? '',
+            budgetId: r.budgetId ?? '',
+            itemId: r.itemId,
+            projectName: r.projectName ?? '',
+            accountCode: r.accountCode ?? '',
+            status: r.status,
+            message: r.message ?? '',
+          }));
+          const csv = Papa.unparse(rows);
+          fs.writeFileSync(flags['output-csv'], csv, 'utf8');
+          wroteCsv = true;
+          if (!this.jsonEnabled()) {
+            this.log(`Saved partial results CSV to ${flags['output-csv']}`);
+          }
+        }
+
+        // Output partial JSON or summary immediately, then exit
+        if (this.jsonEnabled()) {
+          const payload = {
+            deletedCount,
+            failedCount,
+            dryRun: Boolean(flags['dry-run']),
+            outputCsv: flags['output-csv'] ?? null,
+            interrupted: true,
+            results,
+          };
+          const json = JSON.stringify(payload) + '\n';
+          process.stdout.write(json, () => process.exit(130));
+          return;
+        } else {
+          // Use console.log to bypass any oclif UX buffering
+
+          console.log(
+            `Interrupted. Deleted: ${deletedCount}, Failed: ${failedCount}, Dry run: ${Boolean(
+              flags['dry-run'],
+            )}`,
+          );
+          process.exit(130);
+          return;
+        }
+      } catch {
+        // As a fallback, exit with 130
+        process.exit(130);
+      }
+    };
+    process.prependOnceListener('SIGINT', handleInterrupt);
+    process.prependOnceListener('SIGTERM', handleInterrupt);
+    process.once('exit', () => {
+      try {
+        if (flags['output-csv'] && !wroteCsv) {
+          const rows = results.map((r) => ({
+            portalId: r.portalId ?? '',
+            budgetId: r.budgetId ?? '',
+            itemId: r.itemId,
+            projectName: r.projectName ?? '',
+            accountCode: r.accountCode ?? '',
+            status: r.status,
+            message: r.message ?? '',
+          }));
+          const csv = Papa.unparse(rows);
+          fs.writeFileSync(flags['output-csv'], csv, 'utf8');
+        }
+      } catch {}
+    });
+
     for (const item of items) {
+      if (shouldStop) break;
       if (!item.itemId) continue;
 
       // Refresh session every 10 items
       if (refreshCounter % 10 === 0) {
         if (!(await refreshSessionIfNeeded(session.id, !flags['show-browser']))) {
+          if (progressBar) progressBar.stop();
           this.error("Session has expired during operation. Please log in again using 'eb login'.");
         }
         const refreshedSession2 = db.getSessionById(session.id) as SessionRow;
         cookies = JSON.parse(refreshedSession2.session_cookies);
       }
 
-      const spinner = ora(
-        `Deleting budget item ${item.itemId}${
-          item.projectName ? ` - ${item.projectName}` : ''
-        }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
-      ).start();
+      const spinner =
+        flags.verbose && !this.jsonEnabled()
+          ? ora(
+              `Deleting budget item ${item.itemId}${
+                item.projectName ? ` - ${item.projectName}` : ''
+              }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
+            ).start()
+          : null;
+      currentSpinner = spinner;
+
       try {
         await eb.deleteBudgetItem({
           env,
@@ -188,38 +314,78 @@ export default class BudgetitemsDelete extends Command {
           },
           dryRun: flags['dry-run'],
         });
-        spinner.succeed(
-          `Deleted budget item ${item.itemId}${
-            item.projectName ? ` - ${item.projectName}` : ''
-          }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
-        );
+        if (spinner) {
+          spinner.succeed(
+            `Deleted budget item ${item.itemId}${
+              item.projectName ? ` - ${item.projectName}` : ''
+            }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
+          );
+        }
+        currentSpinner = null;
         results.push({
           itemId: item.itemId,
           status: 'success',
+          ...(item.portalId ? { portalId: item.portalId } : {}),
+          ...(item.budgetId ? { budgetId: item.budgetId } : {}),
           ...(item.projectName ? { projectName: item.projectName } : {}),
           ...(item.accountCode ? { accountCode: item.accountCode } : {}),
         });
         deletedCount++;
+        currentSpinner = null;
       } catch (e: any) {
-        spinner.fail(
-          `Failed to delete ${item.itemId}${
-            item.projectName ? ` - ${item.projectName}` : ''
-          }${item.accountCode ? ` - ${item.accountCode}` : ''}: ${e.message}`,
-        );
+        if (spinner) {
+          spinner.fail(
+            `Failed to delete ${item.itemId}${
+              item.projectName ? ` - ${item.projectName}` : ''
+            }${item.accountCode ? ` - ${item.accountCode}` : ''}: ${e.message}`,
+          );
+        }
+        currentSpinner = null;
         results.push({
           itemId: item.itemId,
           status: 'failed',
+          ...(item.portalId ? { portalId: item.portalId } : {}),
+          ...(item.budgetId ? { budgetId: item.budgetId } : {}),
           ...(item.projectName ? { projectName: item.projectName } : {}),
           ...(item.accountCode ? { accountCode: item.accountCode } : {}),
           message: String(e?.message ?? ''),
         });
         failedCount++;
+        currentSpinner = null;
       }
+
+      if (progressBar) {
+        progressBar.update(refreshCounter + 1, { success: deletedCount, failed: failedCount });
+      }
+
       refreshCounter++;
+    }
+
+    if (progressBar) {
+      progressBar.stop();
     }
 
     // Close browser
     await eb.BrowserManager.getInstance().closeBrowser();
+
+    // Optionally write results to CSV
+    if (flags['output-csv']) {
+      const rows = results.map((r) => ({
+        portalId: r.portalId ?? '',
+        budgetId: r.budgetId ?? '',
+        itemId: r.itemId,
+        projectName: r.projectName ?? '',
+        accountCode: r.accountCode ?? '',
+        status: r.status,
+        message: r.message ?? '',
+      }));
+      const csv = Papa.unparse(rows);
+      fs.writeFileSync(flags['output-csv'], csv, 'utf8');
+      wroteCsv = true;
+      if (!this.jsonEnabled()) {
+        this.log(`Saved results CSV to ${flags['output-csv']}`);
+      }
+    }
 
     // Output summary or JSON
     if (this.jsonEnabled()) {
@@ -227,13 +393,23 @@ export default class BudgetitemsDelete extends Command {
         deletedCount,
         failedCount,
         dryRun: Boolean(flags['dry-run']),
+        outputCsv: flags['output-csv'] ?? null,
+        interrupted,
         results,
       };
     }
-    this.log(
-      `Completed. Deleted: ${deletedCount}, Failed: ${failedCount}, Dry run: ${Boolean(
-        flags['dry-run'],
-      )}`,
-    );
+    if (interrupted) {
+      this.log(
+        `Interrupted. Deleted: ${deletedCount}, Failed: ${failedCount}, Dry run: ${Boolean(
+          flags['dry-run'],
+        )}`,
+      );
+    } else {
+      this.log(
+        `Completed. Deleted: ${deletedCount}, Failed: ${failedCount}, Dry run: ${Boolean(
+          flags['dry-run'],
+        )}`,
+      );
+    }
   }
 }

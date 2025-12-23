@@ -3,6 +3,7 @@ import { select } from '@inquirer/prompts';
 import * as fs from 'fs';
 import Papa from 'papaparse';
 import ora from 'ora';
+import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import * as db from '../../lib/db.js';
 import type { SessionRow } from '../../lib/db.js';
@@ -40,6 +41,14 @@ export default class BudgetitemsSet extends Command {
       description: 'Show browser window',
     }),
     'dry-run': Flags.boolean({ description: 'Dry run (no actual changes)' }),
+    verbose: Flags.boolean({
+      char: 'v',
+      description: 'Show detailed progress for each item instead of overall progress bar',
+    }),
+    'output-csv': Flags.string({
+      char: 'o',
+      description: 'Write operation results to a CSV file at this path',
+    }),
   };
 
   public async run(): Promise<any> {
@@ -152,31 +161,156 @@ export default class BudgetitemsSet extends Command {
 
     const results: Array<{
       itemId: string;
+      portalId?: string;
+      budgetId?: string;
       projectName?: string;
       accountCode?: string;
+      allowCharges?: string;
+      approvalRequiredForChange?: string;
+      description?: string;
       status: 'success' | 'failed';
       message?: string;
     }> = [];
     let updatedCount = 0;
     let failedCount = 0;
     let refreshCounter = 0;
+
+    // Create progress bar for non-verbose mode (but not in JSON mode)
+    const progressBar =
+      !flags.verbose && !this.jsonEnabled()
+        ? new cliProgress.SingleBar(
+            {
+              format:
+                'Setting properties [{bar}] {percentage}% | {value}/{total} items | Success: {success} | Failed: {failed}',
+              hideCursor: true,
+              clearOnComplete: true,
+            },
+            cliProgress.Presets.shades_classic,
+          )
+        : null;
+
+    if (progressBar) {
+      progressBar.start(items.length, 0, { success: 0, failed: 0 });
+    }
+
+    // Track current spinner to stop cleanly on interrupt
+    let currentSpinner: ReturnType<typeof ora> | null = null;
+    let shouldStop = false;
+    let interrupted = false;
+    let wroteCsv = false;
+
+    // Graceful interrupt: write partial CSV/JSON and cleanup
+    const handleInterrupt = async (): Promise<void> => {
+      try {
+        interrupted = true;
+        shouldStop = true;
+        if (progressBar) progressBar.stop();
+        if (currentSpinner) {
+          currentSpinner.stop();
+          currentSpinner = null;
+        }
+        // Attempt to close browser
+        try {
+          await eb.BrowserManager.getInstance().closeBrowser();
+        } catch {}
+
+        // Optionally write partial results to CSV
+        if (flags['output-csv'] && !wroteCsv) {
+          const rows = results.map((r) => ({
+            portalId: r.portalId ?? '',
+            budgetId: r.budgetId ?? '',
+            itemId: r.itemId,
+            projectName: r.projectName ?? '',
+            accountCode: r.accountCode ?? '',
+            allowCharges: r.allowCharges ?? '',
+            approvalRequiredForChange: r.approvalRequiredForChange ?? '',
+            description: r.description ?? '',
+            status: r.status,
+            message: r.message ?? '',
+          }));
+          const csv = Papa.unparse(rows);
+          fs.writeFileSync(flags['output-csv'], csv, 'utf8');
+          wroteCsv = true;
+          if (!this.jsonEnabled()) {
+            this.log(`Saved partial results CSV to ${flags['output-csv']}`);
+          }
+        }
+
+        // Output partial JSON or summary
+        // Output partial JSON or summary immediately, then exit
+        if (this.jsonEnabled()) {
+          const payload = {
+            updatedCount,
+            failedCount,
+            dryRun: Boolean(flags['dry-run']),
+            outputCsv: flags['output-csv'] ?? null,
+            interrupted: true,
+            results,
+          };
+          const json = JSON.stringify(payload) + '\n';
+          process.stdout.write(json, () => process.exit(130));
+          return;
+        } else {
+          console.log(
+            `Interrupted. Updated: ${updatedCount}, Failed: ${failedCount}, Dry run: ${Boolean(
+              flags['dry-run'],
+            )}`,
+          );
+          process.exit(130);
+          return;
+        }
+      } catch {
+        process.exit(130);
+      }
+    };
+    process.prependOnceListener('SIGINT', handleInterrupt);
+    process.prependOnceListener('SIGTERM', handleInterrupt);
+    process.once('exit', () => {
+      try {
+        if (flags['output-csv'] && !wroteCsv) {
+          const rows = results.map((r) => ({
+            portalId: r.portalId ?? '',
+            budgetId: r.budgetId ?? '',
+            itemId: r.itemId,
+            projectName: r.projectName ?? '',
+            accountCode: r.accountCode ?? '',
+            allowCharges: r.allowCharges ?? '',
+            approvalRequiredForChange: r.approvalRequiredForChange ?? '',
+            description: r.description ?? '',
+            status: r.status,
+            message: r.message ?? '',
+          }));
+          const csv = Papa.unparse(rows);
+          fs.writeFileSync(flags['output-csv'], csv, 'utf8');
+        }
+      } catch {}
+    });
+
     for (const item of items) {
+      if (shouldStop) break;
       if (!item.itemId) continue;
 
       // Refresh session every 10 items
       if (refreshCounter % 10 === 0) {
         if (!(await refreshSessionIfNeeded(session.id, !flags['show-browser']))) {
+          if (progressBar) progressBar.stop();
           this.error("Session has expired during operation. Please log in again using 'eb login'.");
         }
         const refreshedSession2 = db.getSessionById(session.id) as SessionRow;
         cookies = JSON.parse(refreshedSession2.session_cookies);
       }
 
-      const spinner = ora(
-        `Setting properties for budget item ${item.itemId}${
-          item.projectName ? ` - ${item.projectName}` : ''
-        }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
-      ).start();
+      const spinner =
+        flags.verbose && !this.jsonEnabled()
+          ? ora(
+              `Setting properties for budget item ${item.itemId}${
+                item.projectName ? ` - ${item.projectName}` : ''
+              }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
+            ).start()
+          : null;
+
+      currentSpinner = spinner;
+
       try {
         await eb.setBudgetItemProperties({
           env,
@@ -198,38 +332,91 @@ export default class BudgetitemsSet extends Command {
           },
           dryRun: flags['dry-run'],
         });
-        spinner.succeed(
-          `Set properties for budget item ${item.itemId}${
-            item.projectName ? ` - ${item.projectName}` : ''
-          }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
-        );
+        if (spinner) {
+          spinner.succeed(
+            `Set properties for budget item ${item.itemId}${
+              item.projectName ? ` - ${item.projectName}` : ''
+            }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
+          );
+        }
+
+        currentSpinner = null;
         results.push({
           itemId: item.itemId,
           status: 'success',
+          ...(item.portalId ? { portalId: item.portalId } : {}),
+          ...(item.budgetId ? { budgetId: item.budgetId } : {}),
           ...(item.projectName ? { projectName: item.projectName } : {}),
           ...(item.accountCode ? { accountCode: item.accountCode } : {}),
+          ...(item.allowCharges ? { allowCharges: item.allowCharges } : {}),
+          ...(item.approvalRequiredForChange
+            ? { approvalRequiredForChange: item.approvalRequiredForChange }
+            : {}),
+          ...(item.description ? { description: item.description } : {}),
         });
         updatedCount++;
       } catch (e: any) {
-        spinner.fail(
-          `Failed to set properties for ${item.itemId}${
-            item.projectName ? ` - ${item.projectName}` : ''
-          }${item.accountCode ? ` - ${item.accountCode}` : ''}: ${e.message}`,
-        );
+        if (spinner) {
+          spinner.fail(
+            `Failed to set properties for ${item.itemId}${
+              item.projectName ? ` - ${item.projectName}` : ''
+            }${item.accountCode ? ` - ${item.accountCode}` : ''}: ${e.message}`,
+          );
+        }
+
+        currentSpinner = null;
         results.push({
           itemId: item.itemId,
           status: 'failed',
+          ...(item.portalId ? { portalId: item.portalId } : {}),
+          ...(item.budgetId ? { budgetId: item.budgetId } : {}),
           ...(item.projectName ? { projectName: item.projectName } : {}),
           ...(item.accountCode ? { accountCode: item.accountCode } : {}),
+          ...(item.allowCharges ? { allowCharges: item.allowCharges } : {}),
+          ...(item.approvalRequiredForChange
+            ? { approvalRequiredForChange: item.approvalRequiredForChange }
+            : {}),
+          ...(item.description ? { description: item.description } : {}),
           message: String(e?.message ?? ''),
         });
         failedCount++;
       }
+
+      if (progressBar) {
+        progressBar.update(refreshCounter + 1, { success: updatedCount, failed: failedCount });
+      }
+
       refreshCounter++;
+    }
+
+    if (progressBar) {
+      progressBar.stop();
     }
 
     // Close browser
     await eb.BrowserManager.getInstance().closeBrowser();
+
+    // Optionally write results to CSV
+    if (flags['output-csv']) {
+      const rows = results.map((r) => ({
+        portalId: r.portalId ?? '',
+        budgetId: r.budgetId ?? '',
+        itemId: r.itemId,
+        projectName: r.projectName ?? '',
+        accountCode: r.accountCode ?? '',
+        allowCharges: r.allowCharges ?? '',
+        approvalRequiredForChange: r.approvalRequiredForChange ?? '',
+        description: r.description ?? '',
+        status: r.status,
+        message: r.message ?? '',
+      }));
+      const csv = Papa.unparse(rows);
+      fs.writeFileSync(flags['output-csv'], csv, 'utf8');
+      wroteCsv = true;
+      if (!this.jsonEnabled()) {
+        this.log(`Saved results CSV to ${flags['output-csv']}`);
+      }
+    }
 
     // Output summary or JSON
     if (this.jsonEnabled()) {
@@ -237,11 +424,23 @@ export default class BudgetitemsSet extends Command {
         updatedCount,
         failedCount,
         dryRun: Boolean(flags['dry-run']),
+        outputCsv: flags['output-csv'] ?? null,
+        interrupted,
         results,
       };
     }
-    this.log(
-      `Completed. Updated: ${updatedCount}, Failed: ${failedCount}, Dry run: ${Boolean(flags['dry-run'])}`,
-    );
+    if (interrupted) {
+      this.log(
+        `Interrupted. Updated: ${updatedCount}, Failed: ${failedCount}, Dry run: ${Boolean(
+          flags['dry-run'],
+        )}`,
+      );
+    } else {
+      this.log(
+        `Completed. Updated: ${updatedCount}, Failed: ${failedCount}, Dry run: ${Boolean(
+          flags['dry-run'],
+        )}`,
+      );
+    }
   }
 }
