@@ -37,16 +37,18 @@ Delete budget items from a CSV
 
 ```
 USAGE
-  $ eb budgetitems delete FILE [--json] [--session-id <value>] [-u <value>] [-s] [--dry-run]
+  $ eb budgetitems delete FILE [--json] [-i <value>] [-u <value>] [-s] [--dry-run] [-v] [-o <value>]
 
 ARGUMENTS
   FILE  CSV file containing budget item IDs to delete
 
 FLAGS
+  -i, --session-id=<value>  Session ID to use
+  -o, --output-csv=<value>  Write operation results to a CSV file at this path
   -s, --show-browser        Show browser window
   -u, --username=<value>    Username to use session for
+  -v, --verbose             Show detailed progress for each item instead of overall progress bar
       --dry-run             Dry run (no actual deletion)
-      --session-id=<value>  Session ID to use
 
 GLOBAL FLAGS
   --json  Format output as json.
@@ -68,16 +70,18 @@ Set budget item properties from a CSV
 
 ```
 USAGE
-  $ eb budgetitems set FILE [--json] [--session-id <value>] [-u <value>] [-s] [--dry-run]
+  $ eb budgetitems set FILE [--json] [-i <value>] [-u <value>] [-s] [--dry-run] [-v] [-o <value>]
 
 ARGUMENTS
   FILE  CSV file containing budget item properties to set
 
 FLAGS
+  -i, --session-id=<value>  Session ID to use
+  -o, --output-csv=<value>  Write operation results to a CSV file at this path
   -s, --show-browser        Show browser window
   -u, --username=<value>    Username to use session for
+  -v, --verbose             Show detailed progress for each item instead of overall progress bar
       --dry-run             Dry run (no actual changes)
-      --session-id=<value>  Session ID to use
 
 GLOBAL FLAGS
   --json  Format output as json.
