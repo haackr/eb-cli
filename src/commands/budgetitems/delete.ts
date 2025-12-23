@@ -31,7 +31,7 @@ export default class BudgetitemsDelete extends Command {
   ];
   static override enableJsonFlag = true;
   static override flags = {
-    'session-id': Flags.integer({ description: 'Session ID to use' }),
+    'session-id': Flags.integer({ char: 'i', description: 'Session ID to use' }),
     username: Flags.string({
       char: 'u',
       description: 'Username to use session for',
