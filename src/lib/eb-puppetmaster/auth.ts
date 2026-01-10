@@ -10,6 +10,7 @@ const selectAccountSelector = '#selectAccount >>> #mwc_id_4_select';
 const selectAccountContinueButtonSelector = '#selectAccountContinueBtn >>> button';
 const myHomeTabSelector = '#ctl00_ucTopNav2_tabHomeLink';
 const errorMessageSelector = '#errorMessage';
+const changePasswordUrl = '/auth/Authenticate/LoginSequence.aspx';
 
 export type Account = {
   value: string;
@@ -96,8 +97,6 @@ export async function login(
         await accountSelector?.select(selectedAccount);
         await page.locator(selectAccountContinueButtonSelector).click();
         await page.waitForNavigation();
-      } else {
-        await page.waitForNavigation();
       }
     }
   } else if (headless) {
@@ -110,6 +109,10 @@ export async function login(
     if (await page.$(selectAccountSelector)) {
       await page.waitForNavigation();
     }
+  }
+
+  if (page.url().includes(changePasswordUrl)) {
+    throw new Error('Password change required. Please login manually and change your password.');
   }
 
   const cookies = await browser.cookies();
