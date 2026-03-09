@@ -1,15 +1,12 @@
-import { Args, Command, Flags } from '@oclif/core';
-import { select } from '@inquirer/prompts';
+import { Args, Flags } from '@oclif/core';
 import * as fs from 'fs';
 import Papa from 'papaparse';
 import ora from 'ora';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
-import * as db from '../../lib/db.js';
-import type { SessionRow } from '../../lib/db.js';
-import { promptLoginAndSaveSession, refreshSessionIfNeeded } from '../../lib/login-helper.js';
+import { BaseSessionCommand } from '../../lib/base-session-command.js';
 
-export default class BudgetitemsDelete extends Command {
+export default class BudgetitemsDelete extends BaseSessionCommand {
   static override summary = 'Delete budget items from a CSV';
   static override args = {
     file: Args.string({
@@ -31,15 +28,7 @@ export default class BudgetitemsDelete extends Command {
   ];
   static override enableJsonFlag = true;
   static override flags = {
-    'session-id': Flags.integer({ char: 'i', description: 'Session ID to use' }),
-    username: Flags.string({
-      char: 'u',
-      description: 'Username to use session for',
-    }),
-    'show-browser': Flags.boolean({
-      char: 's',
-      description: 'Show browser window',
-    }),
+    ...BaseSessionCommand.baseFlags,
     'dry-run': Flags.boolean({ description: 'Dry run (no actual deletion)' }),
     verbose: Flags.boolean({
       char: 'v',
@@ -54,76 +43,8 @@ export default class BudgetitemsDelete extends Command {
   public async run(): Promise<any> {
     const { args, flags } = await this.parse(BudgetitemsDelete);
 
-    // Get session
-    let session: SessionRow | undefined;
-    if (flags['session-id']) {
-      session = db.getSessionById(flags['session-id']) as SessionRow;
-      if (!session) {
-        this.error(`Session with ID ${flags['session-id']} not found.`);
-      }
-    } else if (flags.username) {
-      const sessions = db.getSessionsByUsername(flags.username) as SessionRow[];
-      if (sessions.length === 0) {
-        this.error(`No sessions found for username ${flags.username}.`);
-      } else if (sessions.length === 1) {
-        session = sessions[0];
-      } else {
-        // Multiple sessions, prompt to select
-        const choices = sessions.map((s) => ({
-          name: `${s.username} (${eb.getDisplayName(s.environment)}/${
-            s.account
-          }) - ${s.created_at}`,
-          value: s,
-        }));
-        session = await select({
-          message: 'Select a session:',
-          choices,
-        });
-      }
-    } else {
-      // No session specified, check if any sessions exist
-      const allSessions = db.getSessions() as SessionRow[];
-      if (allSessions.length === 0) {
-        // No sessions, prompt to login
-        this.log('No open sessions found. Please log in first.');
-        await promptLoginAndSaveSession({ showBrowser: flags['show-browser'] });
-        // After login, get the new session
-        const newSessions = db.getSessions() as SessionRow[];
-        if (newSessions.length === 1) {
-          session = newSessions[0];
-        } else {
-          // Prompt to select
-          const choices = newSessions.map((s) => ({
-            name: `${s.username} (${eb.getDisplayName(s.environment)}/${
-              s.account
-            }) - ${s.created_at}`,
-            value: s,
-          }));
-          session = await select({
-            message: 'Select a session:',
-            choices,
-          });
-        }
-      } else if (allSessions.length === 1) {
-        session = allSessions[0];
-      } else {
-        // Prompt to select
-        const choices = allSessions.map((s) => ({
-          name: `${s.username} (${eb.getDisplayName(s.environment)}/${
-            s.account
-          }) - ${s.created_at}`,
-          value: s,
-        }));
-        session = await select({
-          message: 'Select a session:',
-          choices,
-        });
-      }
-    }
-
-    if (!session) {
-      this.error('No session selected.');
-    }
+    // Get session using base class method
+    const session = await this.getSession(flags);
 
     // Parse CSV
     const csvData = fs.readFileSync(args.file, 'utf8');
@@ -142,15 +63,8 @@ export default class BudgetitemsDelete extends Command {
     // Get environment
     const env = eb.getEnvironment(session.environment);
 
-    let cookies = JSON.parse(session.session_cookies);
-
-    // Check and refresh session
-    if (!(await refreshSessionIfNeeded(session.id, !flags['show-browser']))) {
-      this.error("Session has expired. Please log in again using 'eb login'.");
-    }
-    // Re-parse cookies after refresh
-    const refreshedSession = db.getSessionById(session.id) as SessionRow;
-    cookies = JSON.parse(refreshedSession.session_cookies);
+    // Get refreshed session cookies using base class method
+    let cookies = await this.getSessionCookies(session.id, !flags['show-browser']);
 
     // Delete each item
     const browser = await eb.BrowserManager.getInstance().getBrowser(
@@ -284,12 +198,7 @@ export default class BudgetitemsDelete extends Command {
 
       // Refresh session every 10 items
       if (refreshCounter % 10 === 0) {
-        if (!(await refreshSessionIfNeeded(session.id, !flags['show-browser']))) {
-          if (progressBar) progressBar.stop();
-          this.error("Session has expired during operation. Please log in again using 'eb login'.");
-        }
-        const refreshedSession2 = db.getSessionById(session.id) as SessionRow;
-        cookies = JSON.parse(refreshedSession2.session_cookies);
+        cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
       }
 
       const spinner =
