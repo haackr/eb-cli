@@ -1,11 +1,12 @@
 {
   "name": "eb-cli",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.3",
   "description": "",
   "main": "index.js",
   "scripts": {
     "dev": "./bin/dev.js",
-    "build": "tsc",
+    "build": "npm run clean && tsc",
+    "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "eslint --ext .ts src",
     "lint:fix": "eslint --ext .ts src --fix",

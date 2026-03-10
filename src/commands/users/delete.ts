@@ -1,6 +1,7 @@
-import { Args, Command, Flags } from '@oclif/core';
+import { Args, Flags } from '@oclif/core';
+import { BaseSessionCommand } from '../../lib/base-session-command.js';
 
-export default class UsersDelete extends Command {
+export default class UsersDelete extends BaseSessionCommand {
   static override args = {
     file: Args.string({ description: 'file to read' }),
   };
