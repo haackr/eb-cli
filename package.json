@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "./bin/dev.js",
-    "build": "npm run clean && tsc",
+    "build": "tsc",
     "clean": "rm -rf dist",
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "eslint --ext .ts src",
