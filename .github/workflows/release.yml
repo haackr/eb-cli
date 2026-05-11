@@ -1,26 +1,21 @@
 name: Release CLI
+
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
 
 jobs:
-  release:
-    name: Build ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        # Define the OS and the corresponding oclif command
-        include:
-          - os: windows-latest
-            pack_cmd: win
-            artifact_path: 'dist/win32/*.exe'
-          - os: macos-latest
-            pack: macos
-            artifact_path: 'dist/macos/*.pkg'
-          - os: ubuntu-latest
-            pack_cmd: deb
-            artifact_path: 'dist/deb/*.deb'
+  oclif-release:
+    name: Pack And Upload Tarballs
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      OCLIF_S3_BUCKET: ${{ vars.OCLIF_S3_BUCKET }}
+      OCLIF_TARGETS: ${{ vars.OCLIF_TARGETS }}
 
     steps:
       - name: Checkout code
@@ -29,35 +24,130 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '22'
+          cache: npm
+
+      - name: Validate required config
+        shell: bash
+        run: |
+          if [ -z "$OCLIF_S3_BUCKET" ]; then
+            echo "Repository variable OCLIF_S3_BUCKET is required."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: npm install
 
-      - name: Build and Manifest
+      - name: Configure oclif update bucket for release artifacts
+        run: |
+          node -e "const fs=require('node:fs');const p='package.json';const pkg=JSON.parse(fs.readFileSync(p,'utf8'));pkg.oclif ??= {};pkg.oclif.update ??= {};pkg.oclif.update.s3 ??= {};pkg.oclif.update.s3.bucket=process.env.OCLIF_S3_BUCKET;pkg.oclif.update.s3.region=process.env.AWS_REGION;pkg.oclif.update.s3.host=`https://${process.env.OCLIF_S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com`;fs.writeFileSync(p, JSON.stringify(pkg, null, 2)+'\\n');"
+
+      - name: Build and manifest
+        run: |
+          npm run build
+          npx oclif manifest
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+            CHANNEL="beta"
+          else
+            CHANNEL="stable"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pack tarballs
+        shell: bash
+        run: |
+          TARGETS="$OCLIF_TARGETS"
+          if [ -z "$TARGETS" ]; then
+            TARGETS="darwin-arm64,darwin-x64,linux-x64,win32-x64"
+          fi
+          npx oclif pack tarballs -r . --targets "$TARGETS" --parallel --xz
+
+      - name: Upload tarballs to S3
+        shell: bash
+        run: |
+          TARGETS="$OCLIF_TARGETS"
+          if [ -z "$TARGETS" ]; then
+            TARGETS="darwin-arm64,darwin-x64,linux-x64,win32-x64"
+          fi
+          npx oclif upload tarballs -r . --targets "$TARGETS" --xz
+
+      - name: Promote release channel
+        run: |
+          npx oclif promote --channel "${{ steps.release_meta.outputs.channel }}" --version "${{ steps.release_meta.outputs.version }}" --sha "${GITHUB_SHA::7}" -r .
+
+  native-installers:
+    name: Build Native Installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            pack_cmd: win
+            artifact_path: dist/win32/*.exe
+            artifact_name: win-installer
+          - os: macos-latest
+            pack_cmd: macos
+            artifact_path: dist/macos/*.pkg
+            artifact_name: macos-installer
+          - os: ubuntu-latest
+            pack_cmd: deb
+            artifact_path: dist/deb/*.deb
+            artifact_name: deb-installer
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build and manifest
         run: |
           npm run build
           npx oclif manifest
 
       - name: Install NSIS
         if: matrix.os == 'windows-latest'
-        run: |
-          choco install nsis -y --version 3.08
-          # We don't even need to touch GITHUB_PATH if we call it directly below
+        shell: powershell
+        run: choco install nsis -y --version 3.08
 
-      - name: Pack Installer
+      - name: Pack installer
         shell: bash
         run: |
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            # Manually add NSIS to the PATH for THIS specific session
-            export PATH=$PATH:"/c/Program Files (x86)/NSIS"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            export PATH="$PATH:/c/Program Files (x86)/NSIS"
           fi
-
           npx oclif pack ${{ matrix.pack_cmd }}
 
-      - name: Upload Installer Artifacts
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.pack_cmd }}-installer
+          name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_path }}
+
+      - name: Upload installer to release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: ${{ matrix.artifact_path }}

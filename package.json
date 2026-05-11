@@ -25,6 +25,9 @@
     "bin": "eb",
     "commands": "./dist/commands",
     "dirname": "eb",
+    "plugins": [
+      "@oclif/plugin-update"
+    ],
     "topicSeparator": " ",
     "macos": {
       "identifier": "com.avicado.eb-cli"
@@ -42,11 +45,18 @@
       "apilogs": {
         "description": "Download api logs as jsonl."
       }
+    },
+    "update": {
+      "s3": {
+        "host": "https://eb-cli-updates-934677684919-us-east-2-an.s3.us-east-2.amazonaws.com",
+        "bucket": "eb-cli-updates-934677684919-us-east-2-an"
+      }
     }
   },
   "dependencies": {
     "@inquirer/prompts": "^8.1.0",
     "@oclif/core": "^4.8.0",
+    "@oclif/plugin-update": "^4.7.0",
     "@oclif/table": "^0.5.1",
     "@types/papaparse": "^5.5.2",
     "better-sqlite3": "^12.5.0",

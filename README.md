@@ -7,7 +7,7 @@ $ npm install -g eb-cli
 $ eb COMMAND
 running command...
 $ eb (--version)
-eb-cli/0.1.0-alpha.3 darwin-arm64 node-v22.14.0
+eb-cli/0.1.0-alpha.4 darwin-arm64 node-v22.14.0
 $ eb --help [COMMAND]
 USAGE
   $ eb COMMAND
@@ -15,6 +15,30 @@ USAGE
 ```
 
 <!-- usagestop -->
+
+# Release Automation
+
+GitHub releases automatically:
+
+- build and publish oclif autoupdate tarballs to S3
+- build native installers (`.exe`, `.pkg`, `.deb`) and attach them to the GitHub Release
+
+The workflow is in `.github/workflows/release.yml` and runs when a release is published.
+
+Configure these repository settings before publishing a release:
+
+- Secrets:
+  - `AWS_ACCESS_KEY_ID`
+  - `AWS_SECRET_ACCESS_KEY`
+- Variables:
+  - `OCLIF_S3_BUCKET` (required)
+  - `AWS_REGION` (optional, defaults to `us-east-1`)
+  - `OCLIF_TARGETS` (optional, defaults to `darwin-arm64,darwin-x64,linux-x64,win32-x64`)
+
+Channel behavior:
+
+- prerelease releases are promoted to `beta`
+- non-prerelease releases are promoted to `stable`
 
 # Commands
 
@@ -30,6 +54,7 @@ USAGE
 - [`eb session delete`](#eb-session-delete)
 - [`eb session list`](#eb-session-list)
 - [`eb session test`](#eb-session-test)
+- [`eb update [CHANNEL]`](#eb-update-channel)
 - [`eb users delete FILE`](#eb-users-delete-file)
 
 ## `eb apilogs download`
@@ -42,7 +67,7 @@ USAGE
 
 FLAGS
   -i, --session-id=<value>   Session ID to use
-  -o, --output-file=<value>  [default: /Users/ryan/dev/eb-cli/api-logs-2026-05-11T20-40-48-484Z.jsonl] Path to output
+  -o, --output-file=<value>  [default: /Users/ryan/dev/eb-cli/api-logs-2026-05-11T21-14-48-161Z.jsonl] Path to output
                              JSONL file (one log record per line)
   -p, --pages=<value>        [default: 10] Number of pages to download from the API logs table
   -s, --show-browser         Show browser window
@@ -320,6 +345,44 @@ EXAMPLES
   $ eb session test --show-browser
 ```
 
+## `eb update [CHANNEL]`
+
+update the eb CLI
+
+```
+USAGE
+  $ eb update [CHANNEL] [--force |  | [-a | -v <value> | -i]] [-b ]
+
+FLAGS
+  -a, --available        See available versions.
+  -b, --verbose          Show more details about the available versions.
+  -i, --interactive      Interactively select version to install. This is ignored if a channel is provided.
+  -v, --version=<value>  Install a specific version.
+      --force            Force a re-download of the requested version.
+
+DESCRIPTION
+  update the eb CLI
+
+EXAMPLES
+  Update to the stable channel:
+
+    $ eb update stable
+
+  Update to a specific version:
+
+    $ eb update --version 1.0.0
+
+  Interactively select version:
+
+    $ eb update --interactive
+
+  See available versions:
+
+    $ eb update --available
+```
+
+_See code: [@oclif/plugin-update](https://github.com/oclif/plugin-update/blob/4.7.39/src/commands/update.ts)_
+
 ## `eb users delete FILE`
 
 Delete users from a CSV
@@ -360,6 +423,7 @@ EXAMPLES
 <!-- toc -->
 
 - [Usage](#usage)
+- [Release Automation](#release-automation)
 - [Commands](#commands)
 - [Table of contents](#table-of-contents)
 <!-- tocstop -->
