@@ -31,10 +31,18 @@
       "identifier": "com.avicado.eb-cli"
     },
     "topics": {
-      "budgetitems": "Change or delete budget items.",
-      "users": "Remove users from the account.",
-      "session": "Add, check, or delete sessions.",
-      "apilogs": "Download api logs as jsonl."
+      "budgetitems": {
+        "description": "Change or delete budget items."
+      },
+      "users": {
+        "description": "Remove users from the account."
+      },
+      "session": {
+        "description": "Add, check, or delete sessions."
+      },
+      "apilogs": {
+        "description": "Download api logs as jsonl."
+      }
     }
   },
   "dependencies": {
