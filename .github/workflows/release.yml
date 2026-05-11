@@ -42,15 +42,18 @@ jobs:
 
       - name: Install NSIS
         if: matrix.os == 'windows-latest'
-        uses: myers-industries/setup-nsis@v2
-        with:
-          nsis-version: 3.08
+        run: |
+          choco install nsis -y --version 3.08
+          # We don't even need to touch GITHUB_PATH if we call it directly below
 
       - name: Pack Installer
         shell: bash
         run: |
-          # This forces Git Bash to 'see' the newly added path immediately
-          export PATH=$PATH:"/c/Program Files (x86)/NSIS"
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            # Manually add NSIS to the PATH for THIS specific session
+            export PATH=$PATH:"/c/Program Files (x86)/NSIS"
+          fi
+
           npx oclif pack ${{ matrix.pack_cmd }}
 
       - name: Upload Installer Artifacts
