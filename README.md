@@ -7,7 +7,7 @@ $ npm install -g eb-cli
 $ eb COMMAND
 running command...
 $ eb (--version)
-eb-cli/0.1.0-alpha.1 darwin-arm64 node-v22.14.0
+eb-cli/0.1.0-alpha.3 darwin-arm64 node-v22.14.0
 $ eb --help [COMMAND]
 USAGE
   $ eb COMMAND
@@ -20,6 +20,7 @@ USAGE
 
 <!-- commands -->
 
+- [`eb apilogs download`](#eb-apilogs-download)
 - [`eb budgetitems delete FILE`](#eb-budgetitems-delete-file)
 - [`eb budgetitems set FILE`](#eb-budgetitems-set-file)
 - [`eb login`](#eb-login)
@@ -29,7 +30,38 @@ USAGE
 - [`eb session delete`](#eb-session-delete)
 - [`eb session list`](#eb-session-list)
 - [`eb session test`](#eb-session-test)
-- [`eb users delete [FILE]`](#eb-users-delete-file)
+- [`eb users delete FILE`](#eb-users-delete-file)
+
+## `eb apilogs download`
+
+Download e-Builder API logs to JSONL
+
+```
+USAGE
+  $ eb apilogs download [--json] [-i <value>] [-u <value>] [-s] [-p <value>] [-o <value>] [--overwrite]
+
+FLAGS
+  -i, --session-id=<value>   Session ID to use
+  -o, --output-file=<value>  [default: /Users/ryan/dev/eb-cli/api-logs-2026-05-11T20-40-48-484Z.jsonl] Path to output
+                             JSONL file (one log record per line)
+  -p, --pages=<value>        [default: 10] Number of pages to download from the API logs table
+  -s, --show-browser         Show browser window
+  -u, --username=<value>     Username to use session for
+      --overwrite            Overwrite output file if it already exists
+
+GLOBAL FLAGS
+  --json  Format output as json.
+
+DESCRIPTION
+  Download e-Builder API logs to JSONL
+
+  Download API logs from e-Builder, including modal details, across paginated pages
+
+EXAMPLES
+  $ eb apilogs download --session-id 1
+
+  $ eb apilogs download --username myuser --pages 10 --output-file ./api-logs.jsonl
+```
 
 ## `eb budgetitems delete FILE`
 
@@ -288,26 +320,37 @@ EXAMPLES
   $ eb session test --show-browser
 ```
 
-## `eb users delete [FILE]`
+## `eb users delete FILE`
 
-describe the command here
+Delete users from a CSV
 
 ```
 USAGE
-  $ eb users delete [FILE] [-f] [-n <value>]
+  $ eb users delete FILE [--json] [-i <value>] [-u <value>] [-s] [--dry-run] [-v] [-o <value>]
 
 ARGUMENTS
-  [FILE]  file to read
+  FILE  CSV file containing user IDs to delete
 
 FLAGS
-  -f, --force
-  -n, --name=<value>  name to print
+  -i, --session-id=<value>  Session ID to use
+  -o, --output-csv=<value>  Write operation results to a CSV file at this path
+  -s, --show-browser        Show browser window
+  -u, --username=<value>    Username to use session for
+  -v, --verbose             Show detailed progress for each user instead of overall progress bar
+      --dry-run             Dry run (no actual deletion)
+
+GLOBAL FLAGS
+  --json  Format output as json.
 
 DESCRIPTION
-  describe the command here
+  Delete users from a CSV
+
+  Delete users from an account using CSV input
 
 EXAMPLES
-  $ eb users delete
+  $ eb users delete users.csv --session-id 1
+
+  $ eb users delete users.csv --username myuser
 ```
 
 <!-- commandsstop -->

@@ -29,6 +29,12 @@
     "topicSeparator": " ",
     "macos": {
       "identifier": "com.avicado.eb-cli"
+    },
+    "topics": {
+      "budgetitems": "Change or delete budget items.",
+      "users": "Remove users from the account.",
+      "session": "Add, check, or delete sessions.",
+      "apilogs": "Download api logs as jsonl."
     }
   },
   "dependencies": {
