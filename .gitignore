@@ -6,7 +6,6 @@ build/
 *.tsbuildinfo
 .vscode/
 *.db
-.github/
 tmp/
 test*.csv
 oclif.manifest.json

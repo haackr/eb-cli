@@ -1,0 +1,53 @@
+name: Release CLI
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # Define the OS and the corresponding oclif command
+        include:
+          - os: windows-latest
+            pack_cmd: win
+            artifact_path: 'dist/win32/*.exe'
+          - os: macos-latest
+            pack: macos
+            artifact_path: 'dist/macos/*.pkg'
+          - os: ubuntu-latest
+            pack_cmd: deb
+            artifact_path: 'dist/deb/*.deb'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build and Manifest
+        run: |
+          npm run build
+          npx oclif manifest
+
+      - name: Pack Installer
+        shell: bash
+        run: |
+          # Dynamically calls 'win', 'macos', or 'deb' based on the matrix
+          npx oclif pack ${{ matrix.pack_cmd }}
+
+      - name: Upload Installer Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.pack_cmd }}-installer
+          path: ${{ matrix.artifact_path }}
