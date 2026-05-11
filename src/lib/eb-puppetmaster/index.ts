@@ -1,4 +1,5 @@
 export * from './auth.js';
+export * from './apilog.js';
 export * from './budgetitem.js';
 export * from './browser-manager.js';
 export * from './user.js';
