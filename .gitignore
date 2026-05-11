@@ -9,3 +9,4 @@ build/
 .github/
 tmp/
 test*.csv
+oclif.manifest.json

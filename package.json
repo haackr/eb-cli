@@ -85,5 +85,10 @@
     "**/*.{js,json,md}": [
       "prettier --write"
     ]
-  }
+  },
+  "files": [
+    "/bin",
+    "/dist",
+    "/oclif.manifest.json"
+  ]
 }
