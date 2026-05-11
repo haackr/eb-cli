@@ -40,17 +40,12 @@ jobs:
           npm run build
           npx oclif manifest
 
-      - name: Install and Force Link NSIS
+      - name: Setup NSIS (Windows)
         if: matrix.os == 'windows-latest'
-        shell: powershell
         run: |
           choco install nsis -y --version 3.08
-          # Manually add to path for this session
-          $nsisPath = "C:\Program Files (x86)\NSIS"
-          echo "$nsisPath" >> $env:GITHUB_PATH
-
-          # Force a symlink so 'makensis' is globally available in a standard bin
-          New-Item -ItemType SymbolLink -Path "C:\Windows\System32\makensis.exe" -Value "$nsisPath\makensis.exe"
+          # This line tells GitHub to add NSIS to the PATH for all future steps
+          echo "C:\Program Files (x86)\NSIS" >> $GITHUB_PATH
 
       - name: Pack Installer
         shell: bash
