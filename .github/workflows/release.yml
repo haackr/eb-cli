@@ -40,17 +40,17 @@ jobs:
           npm run build
           npx oclif manifest
 
-      - name: Setup NSIS (Windows)
+      - name: Install NSIS
         if: matrix.os == 'windows-latest'
-        run: |
-          choco install nsis -y --version 3.08
-          # This line tells GitHub to add NSIS to the PATH for all future steps
-          echo "C:\Program Files (x86)\NSIS" >> $GITHUB_PATH
+        uses: myers-industries/setup-nsis@v2
+        with:
+          nsis-version: 3.08
 
       - name: Pack Installer
         shell: bash
         run: |
-          # Dynamically calls 'win', 'macos', or 'deb' based on the matrix
+          # This forces Git Bash to 'see' the newly added path immediately
+          export PATH=$PATH:"/c/Program Files (x86)/NSIS"
           npx oclif pack ${{ matrix.pack_cmd }}
 
       - name: Upload Installer Artifacts
