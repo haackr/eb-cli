@@ -1,6 +1,7 @@
 export * from './auth.js';
 export * from './budgetitem.js';
 export * from './browser-manager.js';
+export * from './user.js';
 
 export enum Environment {
   US1 = 'app',
