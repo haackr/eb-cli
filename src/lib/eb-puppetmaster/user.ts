@@ -49,7 +49,7 @@ export async function deleteUser(options: DeleteUserArgs): Promise<void> {
 
     await page.locator(userNameInput).fill(user.userName);
     await page.locator(filterButton).click();
-    await page.waitForNetworkIdle();
+    await page.waitForNavigation({ waitUntil: 'networkidle0' });
 
     await page.locator(selectFirstCheckbox).click();
 
