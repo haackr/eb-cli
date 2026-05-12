@@ -38,10 +38,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Configure oclif update bucket for release artifacts
-        run: |
-          node -e "const fs=require('node:fs');const p='package.json';const pkg=JSON.parse(fs.readFileSync(p,'utf8'));pkg.oclif ??= {};pkg.oclif.update ??= {};pkg.oclif.update.s3 ??= {};pkg.oclif.update.s3.bucket=process.env.OCLIF_S3_BUCKET;pkg.oclif.update.s3.region=process.env.AWS_REGION;pkg.oclif.update.s3.host=`https://${process.env.OCLIF_S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com`;fs.writeFileSync(p, JSON.stringify(pkg, null, 2)+'\\n');"
-
       - name: Build and manifest
         run: |
           npm run build
