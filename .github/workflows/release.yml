@@ -134,7 +134,7 @@ jobs:
       - name: Promote release channel
         run: |
           TARGETS="darwin-arm64,darwin-x64,linux-x64,win32-x64"
-          npx oclif promote --channel "${{ steps.release_meta.outputs.channel }}" --version "${{ steps.release_meta.outputs.version }}" --sha "${GITHUB_SHA::7}" --targets "$TARGETS" -r .
+          npx oclif promote --channel "${{ steps.release_meta.outputs.channel }}" --version "${{ steps.release_meta.outputs.version }}" --sha "${GITHUB_SHA::7}" --targets "$TARGETS" --indexes -r .
 
   native-installers:
     name: Build Native Installer (${{ matrix.os }})

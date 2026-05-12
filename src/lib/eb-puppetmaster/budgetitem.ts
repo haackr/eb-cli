@@ -27,6 +27,7 @@ const approvalRequiredForChangeSelector =
   '#ctl00_ctl00_ContentPlaceHolder1_contentSection_chkAppReq';
 const descriptionSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_tbDescription';
 const saveButtonSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnSave';
+const editButtonSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnEditDetails';
 
 export async function deleteBudgetItem(options: deleteBudgetItemArgs): Promise<void> {
   const { env, cookies, browser, budgetItem, dryRun = false } = options;
@@ -97,17 +98,21 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
   const { env, cookies, browser, budgetItem, dryRun = false } = options;
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
   let page: puppeteer.Page | null = null;
+  // console.debug(options);
   try {
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
     page = await context.newPage();
-    const url = `https://${env}.${baseurl}/da2/Cost/Budgets/AddEditLineItem.aspx?PortalId=${
+    const url = `https://${env}.${baseurl}/da2/Cost/Budgets/LineItemDetails.aspx?Mode=Edit&PortalId=${
       budgetItem.projectId
     }&BudgetLineItemId=${budgetItem.budgetItemId}${
       budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ''
-    }&mode=Edit`;
+    }`;
     await page.goto(url, { waitUntil: 'networkidle0' });
-
+    console.log('page loaded');
+    const editButton = await page.waitForSelector(editButtonSelector);
+    console.log(editButton);
+    await editButton?.click();
     // Set properties
     if (budgetItem.allowCharges !== undefined) {
       const allowChargesCheckbox = await page.waitForSelector(allowChargesSelector);
