@@ -54,6 +54,7 @@
       "s3": {
         "bucket": "eb-cli-updates-934677684919-us-east-2-an",
         "host": "https://eb-cli-updates-934677684919-us-east-2-an.s3.us-east-2.amazonaws.com",
+        "acl": "public-read",
         "templates": {
           "target": "<%- bin %>-<%- version %>-<%- platform %>-<%- arch %>.tar.gz"
         }
