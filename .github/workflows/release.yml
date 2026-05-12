@@ -10,12 +10,71 @@ permissions:
 
 jobs:
   oclif-release:
-    name: Pack And Upload Tarballs
-    runs-on: ubuntu-latest
+    name: Pack And Upload Tarball (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-13
+            target: darwin-x64
+          - os: macos-14
+            target: darwin-arm64
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       OCLIF_S3_BUCKET: ${{ vars.OCLIF_S3_BUCKET }}
-      OCLIF_TARGETS: ${{ vars.OCLIF_TARGETS }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Validate required config
+        shell: bash
+        run: |
+          if [ -z "$OCLIF_S3_BUCKET" ]; then
+            echo "Repository variable OCLIF_S3_BUCKET is required."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build and manifest
+        run: |
+          npm run build
+          npx oclif manifest
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Pack tarballs
+        shell: bash
+        run: npx oclif pack tarballs -r . --targets "${{ matrix.target }}" --xz
+
+      - name: Upload tarballs to S3
+        shell: bash
+        run: npx oclif upload tarballs -r . --targets "${{ matrix.target }}" --xz
+
+  oclif-promote:
+    name: Promote Release Channel
+    runs-on: ubuntu-latest
+    needs: oclif-release
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      OCLIF_S3_BUCKET: ${{ vars.OCLIF_S3_BUCKET }}
 
     steps:
       - name: Checkout code
@@ -64,30 +123,9 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Pack tarballs
-        shell: bash
-        run: |
-          TARGETS="$OCLIF_TARGETS"
-          if [ -z "$TARGETS" ]; then
-            TARGETS="darwin-arm64,darwin-x64,linux-x64,win32-x64"
-          fi
-          npx oclif pack tarballs -r . --targets "$TARGETS" --parallel --xz
-
-      - name: Upload tarballs to S3
-        shell: bash
-        run: |
-          TARGETS="$OCLIF_TARGETS"
-          if [ -z "$TARGETS" ]; then
-            TARGETS="darwin-arm64,darwin-x64,linux-x64,win32-x64"
-          fi
-          npx oclif upload tarballs -r . --targets "$TARGETS" --xz
-
       - name: Promote release channel
         run: |
-          TARGETS="$OCLIF_TARGETS"
-          if [ -z "$TARGETS" ]; then
-            TARGETS="darwin-arm64,darwin-x64,linux-x64,win32-x64"
-          fi
+          TARGETS="darwin-arm64,darwin-x64,linux-x64,win32-x64"
           npx oclif promote --channel "${{ steps.release_meta.outputs.channel }}" --version "${{ steps.release_meta.outputs.version }}" --sha "${GITHUB_SHA::7}" --targets "$TARGETS" -r .
 
   native-installers:
