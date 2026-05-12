@@ -17,6 +17,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": "22.14.0"
+  },
   "type": "module",
   "bin": {
     "eb": "./bin/run.js"
@@ -46,17 +49,19 @@
         "description": "Download api logs as jsonl."
       }
     },
+    "node": "22.14.0",
     "update": {
       "s3": {
-        "host": "https://eb-cli-updates-934677684919-us-east-2-an.s3.us-east-2.amazonaws.com",
         "bucket": "eb-cli-updates-934677684919-us-east-2-an",
-        "node": "22.11.0"
+        "host": "https://eb-cli-updates-934677684919-us-east-2-an.s3.us-east-2.amazonaws.com",
+        "templates": {
+          "target": "<%- bin %>-<%- version %>-<%- platform %>-<%- arch %>.tar.gz"
+        }
       }
     }
   },
   "dependencies": {
     "@inquirer/prompts": "^8.1.0",
-    "@oclif/core": "^4.8.0",
     "@oclif/plugin-update": "^4.7.0",
     "@oclif/table": "^0.5.1",
     "@types/papaparse": "^5.5.2",
@@ -70,6 +75,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.3",
     "@eslint/js": "^9.39.2",
+    "@oclif/core": "^4.11.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cli-progress": "^3.11.6",
     "@types/node": "^24.9.2",
@@ -79,6 +85,7 @@
     "eslint-config-prettier": "^9.1.2",
     "eslint-plugin-prettier": "^5.5.4",
     "lint-staged": "^15.5.2",
+    "oclif": "^4.23.0",
     "prettier": "^3.7.4",
     "simple-git-hooks": "^2.13.1",
     "ts-node": "^10.9.2",
