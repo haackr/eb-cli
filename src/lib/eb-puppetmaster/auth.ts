@@ -59,14 +59,18 @@ export async function login(
   const [page] = await browser.pages();
 
   if (!page) throw new Error('No page found');
+  page.setDefaultNavigationTimeout(90_000);
+  page.setDefaultTimeout(90_000);
 
   const loginUrl = `https://${env}.${baseurl}/auth/www/index.aspx?ReturnUrl=%2f`;
-  await page.goto(loginUrl);
+  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
 
   if (username && password) {
     await page.locator(usernameSelector).fill(username);
-    await page.locator(usernameContinueButtonSelector).click();
-    await page.waitForNavigation();
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90_000 }),
+      page.locator(usernameContinueButtonSelector).click(),
+    ]);
 
     await page.locator(passwordSelector).fill(password);
     await page.locator(signInButtonSelector).click();
@@ -85,8 +89,10 @@ export async function login(
       const accountOptions = await page.$$(selectAccountSelector + ' option');
       const accounts = await getAccounts(accountOptions);
       await selectAccount(accountSelector, account, accounts);
-      await page.locator(selectAccountContinueButtonSelector).click();
-      await page.waitForNavigation();
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90_000 }),
+        page.locator(selectAccountContinueButtonSelector).click(),
+      ]);
     } else {
       const accountSelector = await page.$(selectAccountSelector);
       if (accountSelector) {
@@ -95,8 +101,10 @@ export async function login(
         if (!accountSpecifier) throw new Error('Account specifier must be provided');
         const selectedAccount = await accountSpecifier(accounts);
         await accountSelector?.select(selectedAccount);
-        await page.locator(selectAccountContinueButtonSelector).click();
-        await page.waitForNavigation();
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90_000 }),
+          page.locator(selectAccountContinueButtonSelector).click(),
+        ]);
       }
     }
   } else if (headless) {
@@ -136,10 +144,15 @@ export async function isLoggedIn(
   // Create a new browser context for isolation
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
+  page.setDefaultNavigationTimeout(90_000);
+  page.setDefaultTimeout(90_000);
 
   // Clear existing cookies and set new ones
   await context.setCookie(...cookies);
-  await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`);
+  await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 90_000,
+  });
   try {
     await page.waitForSelector(myHomeTabSelector, {
       timeout: 5000,
@@ -171,10 +184,13 @@ export async function logout(
   // Create a new browser context for isolation
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
+  page.setDefaultNavigationTimeout(90_000);
+  page.setDefaultTimeout(90_000);
 
   await context.setCookie(...cookies);
   await page.goto(`https://${env}.${baseurl}/Login/Logout.aspx`, {
-    waitUntil: 'networkidle0',
+    waitUntil: 'domcontentloaded',
+    timeout: 90_000,
   });
 
   // Close the context to clean up

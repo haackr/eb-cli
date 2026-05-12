@@ -84,15 +84,20 @@ export async function promptLoginAndSaveSession(options: LoginOptions = {}): Pro
     throw e;
   }
 
-  const isLoggedIn = await eb.isLoggedIn(env, !options.showBrowser, cookies);
-  if (!isLoggedIn) {
+  const loginCheck = await eb.isLoggedIn(env, !options.showBrowser, cookies);
+  if (!loginCheck.isLoggedIn) {
     spinner.fail('Failed to verify login.');
     await eb.logout(env, !options.showBrowser, cookies);
     throw new Error('Login verification failed');
   }
 
   spinner.succeed('Logged in successfully!');
-  db.addSession(username, eb.getShortEnv(env), options.account || '', JSON.stringify(cookies));
+  db.addSession(
+    username,
+    eb.getShortEnv(env),
+    options.account || '',
+    JSON.stringify(loginCheck.newCookies),
+  );
 
   // Close the browser to allow the process to exit
   await eb.BrowserManager.getInstance().closeBrowser();

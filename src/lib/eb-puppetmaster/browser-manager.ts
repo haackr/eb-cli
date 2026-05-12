@@ -78,10 +78,12 @@ export class BrowserManager {
         this.browser = null;
       }
       this.currentHeadless = headless;
+      const requiredArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
+      const launchArgs = [...new Set([...(args ?? []), ...requiredArgs])];
       try {
         this.browser = await puppeteer.launch({
           headless,
-          args: args || ['--no-sandbox', '--disable-setuid-sandbox'],
+          args: launchArgs,
         });
       } catch {
         console.log(
@@ -95,7 +97,7 @@ export class BrowserManager {
         try {
           this.browser = await puppeteer.launch({
             headless,
-            args: args || ['--no-sandbox'],
+            args: launchArgs,
           });
         } catch (retryError) {
           throw new Error(`Failed to launch browser after installing dependencies: ${retryError}`);
