@@ -37,8 +37,17 @@ Configure these repository settings before publishing a release:
 
 Channel behavior:
 
-- prerelease releases are promoted to `beta`
+- prerelease releases are promoted by semver prerelease tag:
+  - `*-alpha.*` -> `alpha`
+  - `*-beta.*` -> `beta`
+  - `*-rc.*` -> `stable-rc`
+  - other prerelease tags -> `beta`
 - non-prerelease releases are promoted to `stable`
+
+Update channel defaults:
+
+- `eb update` with no channel now defaults to the channel derived from the installed CLI version
+- native installers therefore track the channel they were built for by default (for example, `alpha` installers check `alpha` updates)
 
 # Commands
 

@@ -109,7 +109,15 @@ jobs:
           VERSION="${{ github.event.release.tag_name }}"
           VERSION="${VERSION#v}"
           if [ "${{ github.event.release.prerelease }}" = "true" ]; then
-            CHANNEL="beta"
+            if [[ "$VERSION" == *-alpha* ]]; then
+              CHANNEL="alpha"
+            elif [[ "$VERSION" == *-beta* ]]; then
+              CHANNEL="beta"
+            elif [[ "$VERSION" == *-rc* ]]; then
+              CHANNEL="stable-rc"
+            else
+              CHANNEL="beta"
+            fi
           else
             CHANNEL="stable"
           fi

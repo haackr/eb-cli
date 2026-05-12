@@ -31,6 +31,9 @@
     "plugins": [
       "@oclif/plugin-update"
     ],
+    "hooks": {
+      "preparse": "./dist/hooks/preparse/default-update-channel.js"
+    },
     "topicSeparator": " ",
     "macos": {
       "identifier": "com.avicado.eb-cli"
