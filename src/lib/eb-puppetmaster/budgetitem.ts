@@ -109,9 +109,9 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
       budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ''
     }`;
     await page.goto(url, { waitUntil: 'networkidle0' });
-    console.log('page loaded');
+    // console.log('page loaded');
     const editButton = await page.waitForSelector(editButtonSelector);
-    console.log(editButton);
+    // console.log(editButton);
     await editButton?.click();
     // Set properties
     if (budgetItem.allowCharges !== undefined) {
@@ -145,7 +145,7 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
         budgetItem.description,
       );
     }
-    await page.waitForNetworkIdle();
+    // await page.waitForNetworkIdle();
     // Save changes
     if (!dryRun) {
       const saveButton = await page.$(saveButtonSelector);
