@@ -161,14 +161,14 @@ jobs:
             pack_cmd: win
             artifact_path: dist/win32/*.exe
             artifact_name: win-installer
-          # - os: macos-latest
-          #   pack_cmd: macos
-          #   artifact_path: dist/macos/*.pkg
-          #   artifact_name: macos-installer
-          # - os: ubuntu-latest
-          #   pack_cmd: deb
-          #   artifact_path: dist/deb/*.deb
-          #   artifact_name: deb-installer
+          - os: macos-latest
+            pack_cmd: macos
+            artifact_path: dist/macos/*.pkg
+            artifact_name: macos-installer
+          - os: ubuntu-latest
+            pack_cmd: deb
+            artifact_path: dist/deb/*.deb
+            artifact_name: deb-installer
 
     steps:
       - name: Checkout code

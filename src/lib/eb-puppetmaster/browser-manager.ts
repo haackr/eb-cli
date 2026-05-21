@@ -23,6 +23,47 @@ function getPuppeteerCliPath(): string {
   throw new Error('Could not locate Puppeteer CLI script in installed package.');
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function installChrome(includeDeps: boolean = false): void {
+  const args = [getPuppeteerCliPath(), 'browsers', 'install', 'chrome'];
+
+  if (includeDeps) {
+    args.push('--install-deps');
+  }
+
+  execFileSync(process.execPath, args, {
+    stdio: 'inherit',
+  });
+}
+
+function shouldInstallChromeDeps(): boolean {
+  if (process.platform !== 'linux') {
+    return false;
+  }
+
+  const envValue = process.env['EB_PUPPETEER_INSTALL_DEPS']?.toLowerCase();
+  if (envValue === '1' || envValue === 'true' || envValue === 'yes') {
+    return true;
+  }
+
+  return typeof process.getuid === 'function' && process.getuid() === 0;
+}
+
+function getChromeDependencyHint(): string {
+  if (process.platform !== 'linux') {
+    return '';
+  }
+
+  return ' If this Linux environment allows package installs, rerun with EB_PUPPETEER_INSTALL_DEPS=1 to let Puppeteer install Chrome system dependencies, or install the required libraries manually.';
+}
+
 export class BrowserManager {
   private static instance: BrowserManager;
   private browser: puppeteer.Browser | null = null;
@@ -107,26 +148,37 @@ export class BrowserManager {
           headless,
           args: launchArgs,
         });
-      } catch {
-        console.log(
-          'Puppeteer failed to launch browser. Attempting to install Chrome dependencies...',
-        );
-        // Use the current Node runtime so this works in packaged installs without global npx.
-        execFileSync(
-          process.execPath,
-          [getPuppeteerCliPath(), 'browsers', 'install', 'chrome', '--install-deps'],
-          {
-            stdio: 'inherit',
-          },
-        );
-        // Retry launch
+      } catch (launchError) {
+        console.log('Puppeteer failed to launch browser. Attempting to install Chrome...');
+        installChrome();
+
         try {
           this.browser = await puppeteer.launch({
             headless,
             args: launchArgs,
           });
         } catch (retryError) {
-          throw new Error(`Failed to launch browser after installing dependencies: ${retryError}`);
+          if (shouldInstallChromeDeps()) {
+            console.log(
+              'Chrome installed but the browser still failed to launch. Attempting to install Chrome system dependencies...',
+            );
+            installChrome(true);
+
+            try {
+              this.browser = await puppeteer.launch({
+                headless,
+                args: launchArgs,
+              });
+            } catch (dependencyRetryError) {
+              throw new Error(
+                `Failed to launch browser after installing Chrome dependencies. Initial error: ${getErrorMessage(launchError)}. Retry error: ${getErrorMessage(dependencyRetryError)}`,
+              );
+            }
+          } else {
+            throw new Error(
+              `Failed to launch browser after installing Chrome. Initial error: ${getErrorMessage(launchError)}. Retry error: ${getErrorMessage(retryError)}.${getChromeDependencyHint()}`,
+            );
+          }
         }
       }
     }
