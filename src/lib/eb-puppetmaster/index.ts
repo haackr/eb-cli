@@ -3,6 +3,9 @@ export * from './apilog.js';
 export * from './budgetitem.js';
 export * from './browser-manager.js';
 export * from './user.js';
+export * from './remove-project-role.js';
+export * from './remove-project.js';
+export * from './project.js';
 
 export enum Environment {
   US1 = 'app',
