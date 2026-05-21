@@ -148,7 +148,8 @@ jobs:
         shell: bash
         run: |
           aws s3 cp scripts/install.sh "s3://$OCLIF_S3_BUCKET/install.sh"
-          aws s3 cp scripts/install.sh "s3://$OCLIF_S3_BUCKET/channels/${{ steps.release_meta.outputs.channel }}/install.sh"
+          sed "s/CHANNEL=\"\\${CHANNEL:-stable}\"/CHANNEL=\"\\${CHANNEL:-${{ steps.release_meta.outputs.channel }}}\"/" scripts/install.sh > install.channel.sh
+          aws s3 cp install.channel.sh "s3://$OCLIF_S3_BUCKET/channels/${{ steps.release_meta.outputs.channel }}/install.sh"
 
   native-installers:
     name: Build Native Installer (${{ matrix.os }})

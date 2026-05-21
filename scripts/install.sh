@@ -3,8 +3,8 @@ set -euo pipefail
 
 # eb CLI installer for Linux
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/avicado/eb-cli/main/scripts/install.sh | bash
-#   CHANNEL=alpha bash install.sh
+#   curl -fsSL https://eb-cli-updates-934677684919-us-east-2-an.s3.us-east-2.amazonaws.com/install.sh | bash
+#   curl -fsSL https://eb-cli-updates-934677684919-us-east-2-an.s3.us-east-2.amazonaws.com/channels/alpha/install.sh | CHANNEL=alpha bash
 #   INSTALL_DIR=/opt/eb bash install.sh
 
 S3_HOST="https://eb-cli-updates-934677684919-us-east-2-an.s3.us-east-2.amazonaws.com"

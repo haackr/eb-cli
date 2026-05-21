@@ -1,5 +1,27 @@
 import puppeteer from 'puppeteer';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
+import { dirname, join } from 'path';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+
+function getPuppeteerCliPath(): string {
+  const puppeteerPackageJsonPath = require.resolve('puppeteer/package.json');
+  const puppeteerDir = dirname(puppeteerPackageJsonPath);
+  const cliCandidates = [
+    join(puppeteerDir, 'lib', 'cjs', 'puppeteer', 'node', 'cli.js'),
+    join(puppeteerDir, 'lib', 'esm', 'puppeteer', 'node', 'cli.js'),
+  ];
+
+  for (const candidate of cliCandidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error('Could not locate Puppeteer CLI script in installed package.');
+}
 
 export class BrowserManager {
   private static instance: BrowserManager;
@@ -89,10 +111,14 @@ export class BrowserManager {
         console.log(
           'Puppeteer failed to launch browser. Attempting to install Chrome dependencies...',
         );
-        // Run the install command
-        execSync('npx puppeteer browsers install chrome --install-deps', {
-          stdio: 'inherit',
-        });
+        // Use the current Node runtime so this works in packaged installs without global npx.
+        execFileSync(
+          process.execPath,
+          [getPuppeteerCliPath(), 'browsers', 'install', 'chrome', '--install-deps'],
+          {
+            stdio: 'inherit',
+          },
+        );
         // Retry launch
         try {
           this.browser = await puppeteer.launch({
