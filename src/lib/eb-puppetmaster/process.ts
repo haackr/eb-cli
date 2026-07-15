@@ -337,6 +337,170 @@ async function clearFieldsByNames(
   }, fieldNames);
 }
 
+async function findFieldsStillPopulated(
+  page: puppeteer.Page,
+  fieldNames: string[],
+): Promise<string[]> {
+  return await page.evaluate((names) => {
+    const normalize = (value: string | null | undefined): string =>
+      (value ?? '').trim().toLowerCase().replaceAll(/\s+/g, ' ');
+
+    const cleanLabel = (value: string | null | undefined): string => {
+      const normalized = normalize(value).replace(/:$/g, '').replace(/\?$/g, '').trim();
+      return normalized;
+    };
+
+    const isFieldControl = (
+      el: Element | null,
+    ): el is HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement => {
+      if (!el) return false;
+      return (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement
+      );
+    };
+
+    const isControlBlank = (
+      control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+    ): boolean => {
+      if (control instanceof HTMLSelectElement) {
+        return control.value.trim() === '' || control.selectedIndex < 0;
+      }
+
+      if (control instanceof HTMLTextAreaElement) {
+        return control.value.trim() === '';
+      }
+
+      const type = control.type.toLowerCase();
+      if (type === 'checkbox' || type === 'radio') {
+        return !control.checked;
+      }
+
+      return control.value.trim() === '';
+    };
+
+    const dataFieldsContainer =
+      document.getElementById('ctl00_contentSection_dataFields') ?? document;
+
+    const findRowByFieldName = (fieldName: string): Element | null => {
+      const target = cleanLabel(fieldName);
+      const rows = Array.from(dataFieldsContainer.querySelectorAll('tr'));
+
+      for (const row of rows) {
+        const labelCell = row.querySelector('td.Label');
+        if (!labelCell) continue;
+
+        const labelText = cleanLabel(labelCell.textContent);
+        if (!labelText) continue;
+
+        if (labelText === target) {
+          return row;
+        }
+      }
+
+      return null;
+    };
+
+    const allControls = Array.from(
+      dataFieldsContainer.querySelectorAll('input:not([type="hidden"]), textarea, select'),
+    ).filter(isFieldControl);
+
+    const findControlByAttributes = (
+      name: string,
+    ): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null => {
+      const target = normalize(name);
+
+      for (const control of allControls) {
+        const attributes = [
+          control.id,
+          control.getAttribute('name'),
+          control.getAttribute('aria-label'),
+          control.getAttribute('placeholder'),
+          control.getAttribute('title'),
+          (control as HTMLInputElement).labels?.[0]?.textContent ?? null,
+        ];
+
+        for (const attr of attributes) {
+          const normalizedAttr = normalize(attr);
+          if (!normalizedAttr) continue;
+          if (normalizedAttr === target) {
+            return control;
+          }
+        }
+      }
+
+      return null;
+    };
+
+    const findControlByLabel = (
+      name: string,
+    ): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null => {
+      const target = normalize(name);
+      const labels = Array.from(document.querySelectorAll('label'));
+
+      for (const label of labels) {
+        const labelText = normalize(label.textContent);
+        if (labelText !== target) {
+          continue;
+        }
+
+        const htmlFor = label.getAttribute('for');
+        if (htmlFor) {
+          const byFor = document.getElementById(htmlFor);
+          if (isFieldControl(byFor)) return byFor;
+        }
+
+        const nestedControl = label.querySelector('input:not([type="hidden"]), textarea, select');
+        if (isFieldControl(nestedControl)) {
+          return nestedControl;
+        }
+
+        const container = label.closest('tr, li, .form-group, .field, td, div');
+        if (container) {
+          const nearControl = container.querySelector(
+            'input:not([type="hidden"]), textarea, select',
+          );
+          if (isFieldControl(nearControl)) {
+            return nearControl;
+          }
+        }
+      }
+
+      return null;
+    };
+
+    const fieldsStillPopulated: string[] = [];
+
+    for (const fieldName of names) {
+      const row = findRowByFieldName(fieldName);
+      if (row) {
+        const detailsCell = row.querySelector('td.Details') ?? row;
+        const rowControls = Array.from(
+          detailsCell.querySelectorAll(
+            'input:not([type="hidden"]):not([type="button"]):not([type="submit"]), textarea, select',
+          ),
+        ).filter(isFieldControl);
+
+        if (rowControls.length > 0) {
+          const allBlank = rowControls.every((control) => isControlBlank(control));
+          if (!allBlank) {
+            fieldsStillPopulated.push(fieldName);
+          }
+          continue;
+        }
+      }
+
+      const control = findControlByAttributes(fieldName) ?? findControlByLabel(fieldName);
+      if (!control || !isControlBlank(control)) {
+        fieldsStillPopulated.push(fieldName);
+      }
+    }
+
+    return fieldsStillPopulated;
+  }, fieldNames);
+}
+
 async function clickSave(page: puppeteer.Page): Promise<void> {
   const exactSaveSelectors = [
     '#ctl00_contentSection_btnSave',
@@ -490,6 +654,13 @@ export async function setProcessInstanceFieldsToNull(
     await waitForProcessFormToSettle(page);
 
     const { clearedFields, notFoundFields } = await clearFieldsByNames(page, fieldNames);
+    const fieldsStillPopulated = await findFieldsStillPopulated(page, clearedFields);
+    if (fieldsStillPopulated.length > 0) {
+      throw new Error(
+        `Refusing to save because some fields are still populated: ${fieldsStillPopulated.join(', ')}`,
+      );
+    }
+
     if (!dryRun && clearedFields.length > 0) {
       await clickSave(page);
     }
