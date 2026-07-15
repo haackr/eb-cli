@@ -228,7 +228,7 @@ async function clearFieldsByNames(
         const labelText = cleanLabel(labelCell.textContent);
         if (!labelText) continue;
 
-        if (labelText === target || labelText.includes(target) || target.includes(labelText)) {
+        if (labelText === target) {
           return row;
         }
       }
@@ -258,11 +258,7 @@ async function clearFieldsByNames(
         for (const attr of attributes) {
           const normalizedAttr = normalize(attr);
           if (!normalizedAttr) continue;
-          if (
-            normalizedAttr === target ||
-            normalizedAttr.includes(target) ||
-            target.includes(normalizedAttr)
-          ) {
+          if (normalizedAttr === target) {
             return control;
           }
         }
@@ -279,7 +275,7 @@ async function clearFieldsByNames(
 
       for (const label of labels) {
         const labelText = normalize(label.textContent);
-        if (!(labelText === target || labelText.includes(target) || target.includes(labelText))) {
+        if (labelText !== target) {
           continue;
         }
 
