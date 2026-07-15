@@ -61,7 +61,14 @@ async function clearFieldsByNames(
       if (type === 'radio' || type === 'checkbox') {
         input.checked = false;
       } else {
+        // Use native setter to mimic user edits for frameworks that watch value setters.
+        const valueSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        )?.set;
+        valueSetter?.call(input, '');
         input.value = '';
+        input.defaultValue = '';
       }
       fireEvents(input);
     };
@@ -217,9 +224,64 @@ async function clearFieldsByNames(
     const dataFieldsContainer =
       document.getElementById('ctl00_contentSection_dataFields') ?? document;
 
-    const findRowByFieldName = (fieldName: string): Element | null => {
+    const isVisible = (el: Element | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      if (el.offsetParent === null) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      return el.getClientRects().length > 0;
+    };
+
+    const getEditableControls = (
+      container: Element,
+    ): Array<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement> => {
+      const controls = Array.from(
+        container.querySelectorAll(
+          'input:not([type="hidden"]):not([type="button"]):not([type="submit"]), textarea, select',
+        ),
+      ).filter(isFieldControl);
+
+      return controls.filter((control) => {
+        if (control instanceof HTMLSelectElement) {
+          return !control.disabled;
+        }
+
+        if (control instanceof HTMLTextAreaElement) {
+          return !control.disabled && !control.readOnly;
+        }
+
+        const type = control.type.toLowerCase();
+        if (type === 'radio' || type === 'checkbox') {
+          return !control.disabled;
+        }
+
+        return !control.disabled && !control.readOnly;
+      });
+    };
+
+    const isControlBlank = (
+      control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+    ): boolean => {
+      if (control instanceof HTMLSelectElement) {
+        return control.value.trim() === '' || control.selectedIndex < 0;
+      }
+
+      if (control instanceof HTMLTextAreaElement) {
+        return control.value.trim() === '';
+      }
+
+      const type = control.type.toLowerCase();
+      if (type === 'checkbox' || type === 'radio') {
+        return !control.checked;
+      }
+
+      return control.value.trim() === '';
+    };
+
+    const findRowsByFieldName = (fieldName: string): Element[] => {
       const target = cleanLabel(fieldName);
       const rows = Array.from(dataFieldsContainer.querySelectorAll('tr'));
+      const matches: Element[] = [];
 
       for (const row of rows) {
         const labelCell = row.querySelector('td.Label');
@@ -229,11 +291,27 @@ async function clearFieldsByNames(
         if (!labelText) continue;
 
         if (labelText === target) {
-          return row;
+          matches.push(row);
         }
       }
 
-      return null;
+      return matches.sort((a, b) => {
+        const aDetails = a.querySelector('td.Details') ?? a;
+        const bDetails = b.querySelector('td.Details') ?? b;
+        const aControls = getEditableControls(aDetails);
+        const bControls = getEditableControls(bDetails);
+
+        const aVisible = isVisible(a) ? 1 : 0;
+        const bVisible = isVisible(b) ? 1 : 0;
+        if (aVisible !== bVisible) return bVisible - aVisible;
+
+        const aHasNonBlank = aControls.some((control) => !isControlBlank(control)) ? 1 : 0;
+        const bHasNonBlank = bControls.some((control) => !isControlBlank(control)) ? 1 : 0;
+        if (aHasNonBlank !== bHasNonBlank) return bHasNonBlank - aHasNonBlank;
+
+        if (aControls.length !== bControls.length) return bControls.length - aControls.length;
+        return 0;
+      });
     };
 
     const allControls = Array.from(
@@ -308,9 +386,32 @@ async function clearFieldsByNames(
     const notFoundFields: string[] = [];
 
     for (const fieldName of names) {
-      const row = findRowByFieldName(fieldName);
-      if (row) {
-        if (clearByRow(row)) {
+      const rows = findRowsByFieldName(fieldName);
+      if (rows.length > 0) {
+        let rowCleared = false;
+        for (const row of rows) {
+          const detailsCell = row.querySelector('td.Details') ?? row;
+          const editableControlsBefore = getEditableControls(detailsCell);
+          const hadNonBlankBefore = editableControlsBefore.some(
+            (control) => !isControlBlank(control),
+          );
+
+          if (!clearByRow(row)) {
+            continue;
+          }
+
+          const editableControlsAfter = getEditableControls(detailsCell);
+          const isBlankAfter =
+            editableControlsAfter.length === 0 ||
+            editableControlsAfter.every((control) => isControlBlank(control));
+
+          if (isBlankAfter || hadNonBlankBefore) {
+            rowCleared = true;
+            break;
+          }
+        }
+
+        if (rowCleared) {
           clearedFields.push(fieldName);
           continue;
         }
@@ -383,9 +484,18 @@ async function findFieldsStillPopulated(
     const dataFieldsContainer =
       document.getElementById('ctl00_contentSection_dataFields') ?? document;
 
-    const findRowByFieldName = (fieldName: string): Element | null => {
+    const isVisible = (el: Element | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      if (el.offsetParent === null) return false;
+      const style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      return el.getClientRects().length > 0;
+    };
+
+    const findRowsByFieldName = (fieldName: string): Element[] => {
       const target = cleanLabel(fieldName);
       const rows = Array.from(dataFieldsContainer.querySelectorAll('tr'));
+      const matches: Element[] = [];
 
       for (const row of rows) {
         const labelCell = row.querySelector('td.Label');
@@ -395,11 +505,15 @@ async function findFieldsStillPopulated(
         if (!labelText) continue;
 
         if (labelText === target) {
-          return row;
+          matches.push(row);
         }
       }
 
-      return null;
+      return matches.sort((a, b) => {
+        const aVisible = isVisible(a) ? 1 : 0;
+        const bVisible = isVisible(b) ? 1 : 0;
+        return bVisible - aVisible;
+      });
     };
 
     const allControls = Array.from(
@@ -473,22 +587,34 @@ async function findFieldsStillPopulated(
     const fieldsStillPopulated: string[] = [];
 
     for (const fieldName of names) {
-      const row = findRowByFieldName(fieldName);
-      if (row) {
-        const detailsCell = row.querySelector('td.Details') ?? row;
-        const rowControls = Array.from(
-          detailsCell.querySelectorAll(
-            'input:not([type="hidden"]):not([type="button"]):not([type="submit"]), textarea, select',
-          ),
-        ).filter(isFieldControl);
+      const rows = findRowsByFieldName(fieldName);
+      if (rows.length > 0) {
+        let foundPopulated = false;
 
-        if (rowControls.length > 0) {
+        for (const row of rows) {
+          const detailsCell = row.querySelector('td.Details') ?? row;
+          const rowControls = Array.from(
+            detailsCell.querySelectorAll(
+              'input:not([type="hidden"]):not([type="button"]):not([type="submit"]), textarea, select',
+            ),
+          ).filter(isFieldControl);
+
+          if (rowControls.length === 0) {
+            continue;
+          }
+
           const allBlank = rowControls.every((control) => isControlBlank(control));
           if (!allBlank) {
-            fieldsStillPopulated.push(fieldName);
+            foundPopulated = true;
+            break;
           }
-          continue;
         }
+
+        if (foundPopulated) {
+          fieldsStillPopulated.push(fieldName);
+        }
+
+        continue;
       }
 
       const control = findControlByAttributes(fieldName) ?? findControlByLabel(fieldName);
