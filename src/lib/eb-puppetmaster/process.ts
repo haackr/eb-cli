@@ -389,6 +389,38 @@ async function clickSave(page: puppeteer.Page): Promise<void> {
   ]);
 }
 
+async function waitForProcessFormToSettle(page: puppeteer.Page): Promise<void> {
+  await page
+    .waitForSelector('#ctl00_contentSection_dataFields', {
+      timeout: 20_000,
+    })
+    .catch(() => null);
+
+  await page
+    .waitForFunction(
+      () => {
+        const isDocumentReady = document.readyState === 'complete';
+
+        const pageRequestManager = (
+          window as any
+        ).Sys?.WebForms?.PageRequestManager?.getInstance?.();
+        const isAspNetPostBackIdle = !(pageRequestManager?.get_isInAsyncPostBack?.() ?? false);
+
+        const isJQueryIdle =
+          typeof (window as any).jQuery === 'undefined' ||
+          ((window as any).jQuery.active ?? 0) === 0;
+
+        return isDocumentReady && isAspNetPostBackIdle && isJQueryIdle;
+      },
+      {
+        timeout: 15_000,
+      },
+    )
+    .catch(() => null);
+
+  await page.waitForNetworkIdle({ idleTime: 1_000, timeout: 8_000 }).catch(() => null);
+}
+
 async function isAuthenticatedProcessPage(page: puppeteer.Page): Promise<boolean> {
   const currentUrl = page.url().toLowerCase();
   if (
@@ -454,6 +486,8 @@ export async function setProcessInstanceFieldsToNull(
         `Session is not active on the process instance page. Requested URL: ${requestedUrl}. Final URL: ${page.url()}.`,
       );
     }
+
+    await waitForProcessFormToSettle(page);
 
     const { clearedFields, notFoundFields } = await clearFieldsByNames(page, fieldNames);
     if (!dryRun && clearedFields.length > 0) {
