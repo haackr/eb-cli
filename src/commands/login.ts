@@ -3,7 +3,11 @@ import { promptLoginAndSaveSession } from '../lib/login-helper.js';
 
 export default class Login extends Command {
   static override description = 'log in to e-Builder';
-  static override examples = ['<%= config.bin %> <%= command.id %>'];
+  static override examples = [
+    '<%= config.bin %> <%= command.id %>',
+    '<%= config.bin %> <%= command.id %> --show_browser # keep browser visible during login',
+    '<%= config.bin %> <%= command.id %> --username jane.doe --environment us1 --sso-url https://idp.example.com/ebuilder',
+  ];
   static override flags = {
     show_browser: Flags.boolean({
       char: 's',
@@ -20,18 +24,29 @@ export default class Login extends Command {
       description: 'environment',
       options: ['us1', 'us2', 'us3', 'us4', 'gov', 'ca'],
     }),
+    'sso-url': Flags.string({
+      description: 'SSO entry URL; opens a browser for interactive provider authentication',
+    }),
   };
   static override aliases: string[] = ['session:create'];
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(Login);
 
-    const options: any = {};
+    const options: {
+      showBrowser?: boolean;
+      username?: string;
+      password?: string;
+      account?: string;
+      environment?: string;
+      ssoUrl?: string;
+    } = {};
     if (flags.show_browser !== undefined) options.showBrowser = flags.show_browser;
     if (flags.username) options.username = flags.username;
     if (flags.password) options.password = flags.password;
     if (flags.account) options.account = flags.account;
     if (flags.environment) options.environment = flags.environment;
+    if (flags['sso-url']) options.ssoUrl = flags['sso-url'];
 
     await promptLoginAndSaveSession(options);
 

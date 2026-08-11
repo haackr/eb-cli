@@ -171,7 +171,7 @@ log in to e-Builder
 
 ```
 USAGE
-  $ eb login [-s] [-u <value>] [-p <value>] [-a <value>] [-e us1|us2|us3|us4|gov|ca]
+  $ eb login [-s] [-u <value>] [-p <value>] [-a <value>] [-e us1|us2|us3|us4|gov|ca] [--sso-url <value>]
 
 FLAGS
   -a, --account=<value>       account (if the user has access to multiple accounts)
@@ -180,6 +180,7 @@ FLAGS
   -p, --password=<value>      password
   -s, --show_browser          show browser window (useful for debugging; default is headless)
   -u, --username=<value>      username
+      --sso-url=<value>       SSO entry URL; opens a browser for interactive provider authentication
 
 DESCRIPTION
   log in to e-Builder
@@ -189,6 +190,10 @@ ALIASES
 
 EXAMPLES
   $ eb login
+
+  $ eb login --show_browser # keep browser visible during login
+
+  $ eb login --username jane.doe --environment us1 --sso-url https://idp.example.com/ebuilder
 ```
 
 ## `eb logout`

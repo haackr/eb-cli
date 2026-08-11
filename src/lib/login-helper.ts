@@ -10,6 +10,7 @@ interface LoginOptions {
   password?: string;
   account?: string;
   environment?: string;
+  ssoUrl?: string;
 }
 
 export async function promptLoginAndSaveSession(options: LoginOptions = {}): Promise<void> {
@@ -59,26 +60,45 @@ export async function promptLoginAndSaveSession(options: LoginOptions = {}): Pro
     });
   }
 
+  const usingSso = Boolean(options.ssoUrl);
   let pass = options.password;
-  if (!pass) {
+  if (!usingSso && !pass) {
     pass = await password({ message: 'Enter your password:', mask: '*' });
   }
 
-  const spinner = ora('Logging in to e-Builder...').start();
-  let cookies: any[] = [];
+  const spinner = ora(
+    usingSso || options.showBrowser
+      ? 'Waiting for interactive login in the browser...'
+      : 'Logging in to e-Builder...',
+  ).start();
+  let cookies;
   try {
-    cookies = await eb.login(
-      env,
-      !options.showBrowser,
-      username,
-      pass,
-      options.account,
-      async (accounts: Account[]) => {
-        const selectedAccount = await accountSpecifier(accounts);
-        options.account = selectedAccount.text;
-        return selectedAccount.value;
-      },
-    );
+    if (options.ssoUrl) {
+      spinner.info('Complete your SSO login in the browser window.');
+      spinner.start('Waiting for SSO login in the browser...');
+      cookies = await eb.loginWithSso(env, options.ssoUrl);
+    } else {
+      if (options.showBrowser) {
+        spinner.info('Complete Trimble ID authentication in the browser if prompted.');
+        spinner.start('Waiting for interactive login in the browser...');
+      }
+      cookies = await eb.login(
+        env,
+        !options.showBrowser,
+        username,
+        pass,
+        options.account,
+        async (accounts: Account[]) => {
+          const selectedAccount = await accountSpecifier(accounts);
+          options.account = selectedAccount.text;
+          return selectedAccount.value;
+        },
+        undefined,
+        (selectedAccount: Account) => {
+          options.account = selectedAccount.text;
+        },
+      );
+    }
   } catch (e: any) {
     spinner.fail(`Failed to log in: ${e.message}`);
     throw e;
