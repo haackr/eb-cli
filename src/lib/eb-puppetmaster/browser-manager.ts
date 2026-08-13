@@ -112,7 +112,11 @@ export class BrowserManager {
     return BrowserManager.instance;
   }
 
-  async getBrowser(headless: boolean = true, args?: string[]): Promise<puppeteer.Browser> {
+  async getBrowser(
+    headless: boolean = true,
+    args?: string[],
+    useUserChrome?: boolean = false,
+  ): Promise<puppeteer.Browser> {
     // Check if browser is truly connected by testing it
     let needsRelaunch = false;
     if (!this.browser || !this.browser.connected) {
@@ -144,10 +148,24 @@ export class BrowserManager {
       const requiredArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
       const launchArgs = [...new Set([...(args ?? []), ...requiredArgs])];
       try {
-        this.browser = await puppeteer.launch({
-          headless,
-          args: launchArgs,
-        });
+        if (useUserChrome) {
+          const userChromeArgs = [
+            '--disable-blink-features=AutomationControlled',
+            '--start-maximized',
+          ];
+          const newLaunchArgs = [...new Set(...launchArgs, ...userChromeArgs)];
+          this.browser = await puppeteer.launch({
+            headless,
+            channel: 'chrome',
+            ignoreDefaultArgs: ['--enable-automation'],
+            args: newLaunchArgs,
+          });
+        } else {
+          this.browser = await puppeteer.launch({
+            headless,
+            args: launchArgs,
+          });
+        }
       } catch (launchError) {
         console.log('Puppeteer failed to launch browser. Attempting to install Chrome...');
         installChrome();

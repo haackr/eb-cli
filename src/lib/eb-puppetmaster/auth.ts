@@ -346,7 +346,11 @@ export async function loginWithSso(
   }
 
   if (!browser) {
-    browser = await BrowserManager.getInstance().getBrowser(false, ['--window-size=1200,800']);
+    browser = await BrowserManager.getInstance().getBrowser(
+      false,
+      ['--window-size=1200,800'],
+      true,
+    );
   }
 
   const [page] = await browser.pages();
