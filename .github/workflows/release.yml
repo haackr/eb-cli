@@ -130,7 +130,7 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          if [[ "$VERSION" == "*-*" ]]; then
+          if [[ "$VERSION" == *-* ]]; then
             if [[ "$VERSION" == *-alpha* ]]; then
               CHANNEL="alpha"
             elif [[ "$VERSION" == *-beta* ]]; then
