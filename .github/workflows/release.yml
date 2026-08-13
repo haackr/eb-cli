@@ -155,8 +155,9 @@ jobs:
 
       - name: Promote release channel
         run: |
+          COMMIT_SHA=$(git rev-parse --short HEAD)
           TARGETS="darwin-arm64,darwin-x64,linux-x64,win32-x64"
-          npx oclif promote --channel "${{ steps.release_meta.outputs.channel }}" --version "${{ steps.release_meta.outputs.version }}" --sha "${GITHUB_SHA::7}" --targets "$TARGETS" --indexes -r .
+          npx oclif promote --channel "${{ steps.release_meta.outputs.channel }}" --version "${{ steps.release_meta.outputs.version }}" --sha "$COMMIT_SHA" --targets "$TARGETS" --indexes -r .
 
       - name: Upload install script to S3
         shell: bash
