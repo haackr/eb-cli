@@ -1,15 +1,28 @@
 name: Release CLI
 
 on:
-  release:
-    types:
-      - published
+  push:
+    tags:
+     - 'v*'
 
 permissions:
   contents: write
 
 jobs:
+  create-release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@4
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
   oclif-release:
+    needs: create-release
     name: Pack And Upload Tarball (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -71,7 +84,8 @@ jobs:
       - name: Upload tarballs to release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             dist/*${{ matrix.target }}*.tar.gz
             dist/*${{ matrix.target }}*.tar.xz
@@ -114,9 +128,9 @@ jobs:
         id: release_meta
         shell: bash
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+          if [ "${{ github.ref_name }}" = "true" ]; then
             if [[ "$VERSION" == *-alpha* ]]; then
               CHANNEL="alpha"
             elif [[ "$VERSION" == *-beta* ]]; then
@@ -152,6 +166,7 @@ jobs:
           aws s3 cp install.channel.sh "s3://$OCLIF_S3_BUCKET/channels/${{ steps.release_meta.outputs.channel }}/install.sh"
 
   native-installers:
+    needs: create-release
     name: Build Native Installer (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -204,5 +219,6 @@ jobs:
       - name: Upload installer to release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}
+          tag_name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: ${{ matrix.artifact_path }}
