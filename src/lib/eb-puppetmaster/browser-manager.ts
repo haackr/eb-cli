@@ -115,7 +115,7 @@ export class BrowserManager {
   async getBrowser(
     headless: boolean = true,
     args?: string[],
-    useUserChrome?: boolean = false,
+    useUserChrome: boolean = false,
   ): Promise<puppeteer.Browser> {
     // Check if browser is truly connected by testing it
     let needsRelaunch = false;
