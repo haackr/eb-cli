@@ -1,4 +1,7 @@
 import puppeteer from 'puppeteer';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
@@ -149,16 +152,28 @@ export class BrowserManager {
       const launchArgs = [...new Set([...(args ?? []), ...requiredArgs])];
       try {
         if (useUserChrome) {
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eb-sso-login-browser'));
           const userChromeArgs = [
+            `--user-data-dir=${tmpDir}`,
+            '--new-window',
+            '--no-first-run',
+            '--no-default-browser-check',
             '--disable-blink-features=AutomationControlled',
             '--start-maximized',
           ];
-          const newLaunchArgs = [...new Set(...launchArgs, ...userChromeArgs)];
+          const newLaunchArgs = [...new Set([...launchArgs, ...userChromeArgs])];
           this.browser = await puppeteer.launch({
             headless,
             channel: 'chrome',
             ignoreDefaultArgs: ['--enable-automation'],
             args: newLaunchArgs,
+          });
+          this.browser.on('disconnected', () => {
+            try {
+              if (fs.existsSync(tmpDir)) {
+                fs.rmSync(tmpDir, { recursive: true, force: true });
+              }
+            } catch {}
           });
         } else {
           this.browser = await puppeteer.launch({
