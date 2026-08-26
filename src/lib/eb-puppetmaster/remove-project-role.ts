@@ -12,6 +12,95 @@ export type RemoveUserFromProjectRoleArgs = {
   dryRun: boolean;
 };
 
+async function findRemoveButton(
+  userFrame: puppeteer.Frame,
+): Promise<puppeteer.ElementHandle | null> {
+  const selectors = [
+    '#btnRoleRemove',
+    '#btnRemove',
+    '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnRoleRemove',
+    '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnRemove',
+    'input[type="submit"][value*="Remove" i]',
+    'input[type="button"][value*="Remove" i]',
+    'button[id*="Remove" i]',
+    'input[id*="Remove" i]',
+  ];
+
+  for (const selector of selectors) {
+    const btn = await userFrame.$(selector);
+    if (btn) {
+      const isVisible = await btn
+        .evaluate((el) => {
+          const htmlEl = el as HTMLElement;
+          return htmlEl.offsetParent !== null && !htmlEl.hidden;
+        })
+        .catch(() => false);
+      if (isVisible) return btn;
+    }
+  }
+
+  return null;
+}
+
+async function selectMatchingUsersOnCurrentPage(
+  userFrame: puppeteer.Frame,
+  requestedKeys: string[],
+): Promise<string[]> {
+  return await userFrame.evaluate((keys: string[]) => {
+    const requested = new Set(keys.map((k) => k.toLowerCase().trim()));
+    const matched: string[] = [];
+    const rows = Array.from(
+      document.querySelectorAll('#grdResults tr.RowData, #grdResults tr.AltRowData'),
+    );
+
+    for (const row of rows) {
+      const checkbox = row.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+      if (!checkbox) continue;
+
+      const cellTexts = Array.from(row.querySelectorAll('td')).map((c) =>
+        (c.textContent ?? '').toLowerCase().trim(),
+      );
+      const dataAttrs = [
+        checkbox.value,
+        checkbox.getAttribute('data-username'),
+        checkbox.getAttribute('data-name'),
+        checkbox.getAttribute('data-userid'),
+      ]
+        .filter(Boolean)
+        .map((a) => a!.toLowerCase().trim());
+
+      const rowIdentifiers = new Set([...cellTexts, ...dataAttrs]);
+
+      let matchedKey: string | undefined;
+      for (const req of requested) {
+        if (rowIdentifiers.has(req)) {
+          matchedKey = req;
+          break;
+        }
+        for (const id of rowIdentifiers) {
+          if (id.includes(req) || req.includes(id)) {
+            matchedKey = req;
+            break;
+          }
+        }
+        if (matchedKey) break;
+      }
+
+      if (matchedKey) {
+        if (!checkbox.checked) {
+          checkbox.click();
+          checkbox.checked = true;
+          checkbox.dispatchEvent(new Event('click', { bubbles: true }));
+          checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        matched.push(matchedKey);
+      }
+    }
+
+    return matched;
+  }, requestedKeys);
+}
+
 /**
  * Remove one or more users from a project role.
  * Groups by project/role so all users can be selected before triggering a single remove action.
@@ -31,109 +120,140 @@ export async function removeUserFromProjectRoleByName(
     await context.setCookie(...cookies);
     page = await context.newPage();
 
+    // Auto-accept any confirmation dialogs (e.g. "Are you sure you want to remove...")
+    page.on('dialog', async (dialog) => {
+      try {
+        await dialog.accept();
+      } catch {}
+    });
+
     // 1. Find the project's PortalID from the project list
     const portalId = await getPortalIdByProjectName(page, env, projectName);
 
     // 2. Navigate to the project participants (role management) page
     const roleMgmtUrl = `https://${env}.${baseurl}/da2/Projects/ProjectParticipants.aspx?PortalID={${portalId}}`;
-    await page.goto(roleMgmtUrl, { waitUntil: 'networkidle0' });
+    await page.goto(roleMgmtUrl, { waitUntil: 'domcontentloaded' });
 
     // 3. Select the role in the left pane iframe
     const roleListFrameEl = await page.waitForSelector(
-      'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_groupList',
+      'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_groupList, iframe[name*="groupList"]',
+      { timeout: 30_000 },
     );
     if (!roleListFrameEl) throw new Error('Role list iframe not found');
     const roleFrame = await roleListFrameEl.contentFrame();
     if (!roleFrame) throw new Error('Could not access role list iframe content');
 
+    await roleFrame.waitForSelector('#dgAccountRoles, table', { timeout: 30_000 });
+
     // Find the role link by trimmed text in the dgAccountRoles table
-    const roleLinks = await roleFrame.$$('#dgAccountRoles a[name="selectedGroup"]');
+    const targetRoleNameNorm = roleName.trim().toLowerCase();
+    const roleLinks = await roleFrame.$$(
+      '#dgAccountRoles a[name="selectedGroup"], #dgAccountRoles a, table a',
+    );
     let roleLink: puppeteer.ElementHandle | null = null;
     for (const link of roleLinks) {
       const text = await link.evaluate((el) => el.textContent?.trim() ?? '');
-      if (text === roleName) {
+      if (text.toLowerCase() === targetRoleNameNorm) {
         roleLink = link;
         break;
       }
     }
     if (!roleLink) throw new Error(`Role '${roleName}' not found in project '${projectName}'`);
-    await roleLink.click();
 
-    // Wait for the right pane iframe to reload with users for the selected role
-    await page.waitForNetworkIdle();
+    // Click role link and wait for the right pane iframe to reload with users
+    await Promise.all([
+      page.waitForNetworkIdle({ idleTime: 500, timeout: 15_000 }).catch(() => null),
+      roleLink.click(),
+    ]);
 
     // 4. Get the user list iframe
     const userListFrameEl = await page.waitForSelector(
-      'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList',
+      'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList, iframe[name*="userList"]',
+      { timeout: 30_000 },
     );
     if (!userListFrameEl) throw new Error('User list iframe not found');
     const userFrame = await userListFrameEl.contentFrame();
     if (!userFrame) throw new Error('Could not access user list iframe content');
 
-    await userFrame.waitForSelector('#grdResults');
+    await userFrame.waitForSelector('#grdResults, table', { timeout: 30_000 });
 
-    // 5. Select checkboxes for matching users from the current (non-paginated) grid.
-    // Normalize usernames to avoid case/whitespace mismatches.
+    // 5. Match and select users across all grid pages
     const requestedByKey = new Map<string, string>();
     for (const userName of userNames) {
       const key = userName.trim().toLowerCase();
       if (!requestedByKey.has(key)) requestedByKey.set(key, userName);
     }
 
-    const matchedKeys = new Set(
-      await userFrame.evaluate((keys: string[]) => {
-        const requested = new Set(keys);
-        const matched: string[] = [];
-        const rows = Array.from(
-          document.querySelectorAll('#grdResults tr.RowData, #grdResults tr.AltRowData'),
+    const matchedKeys = new Set<string>();
+    const remainingKeys = () =>
+      Array.from(requestedByKey.keys()).filter((k) => !matchedKeys.has(k));
+
+    while (true) {
+      const currentMatched = await selectMatchingUsersOnCurrentPage(userFrame, remainingKeys());
+      for (const k of currentMatched) {
+        matchedKeys.add(k);
+      }
+
+      if (remainingKeys().length === 0) {
+        break;
+      }
+
+      // Check if there is a next page in the grid
+      const nextGridLink = await userFrame.evaluateHandle(() => {
+        const pagingRow = document.querySelector('#grdResults tr.Paging, tr.Paging');
+        if (!pagingRow) return null;
+
+        const currentSpan = pagingRow.querySelector('span');
+        const currentPageNum = currentSpan
+          ? parseInt(currentSpan.textContent?.trim() || '1', 10)
+          : 1;
+        const targetPageNum = String(currentPageNum + 1);
+
+        const links = Array.from(pagingRow.querySelectorAll('a'));
+        return (
+          links.find((a) => a.textContent?.trim() === targetPageNum) ||
+          links.find((a) => (a.textContent ?? '').toLowerCase().includes('next')) ||
+          null
         );
+      });
 
-        for (const row of rows) {
-          const cells = row.querySelectorAll('td');
-          const usernameCell = cells.item(2);
-          if (!usernameCell) continue;
+      const nextLinkEl = nextGridLink.asElement();
+      if (!nextLinkEl) break;
 
-          const key = (usernameCell.textContent ?? '').trim().toLowerCase();
-          if (!requested.has(key)) continue;
+      await Promise.all([
+        page.waitForNetworkIdle({ idleTime: 500, timeout: 15_000 }).catch(() => null),
+        (nextLinkEl as puppeteer.ElementHandle<HTMLElement>).click(),
+      ]);
 
-          const checkbox = row.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
-          if (!checkbox) continue;
-
-          if (!checkbox.checked) {
-            checkbox.click();
-          }
-
-          if (checkbox.checked) {
-            matched.push(key);
-          }
-        }
-
-        return matched;
-      }, Array.from(requestedByKey.keys())),
-    );
+      await userFrame.waitForSelector('#grdResults, table', { timeout: 15_000 });
+    }
 
     // 6. Click remove once for all selected users (if not dry-run) and accept confirmation.
     if (!dryRun && matchedKeys.size > 0) {
-      const removeBtn = await userFrame.waitForSelector('#btnRoleRemove');
-      if (!removeBtn) throw new Error('Remove button not found');
-      page.once('dialog', (dialog) => dialog.accept());
-      await removeBtn.click();
-      await page.waitForNetworkIdle();
-      await userFrame.waitForSelector('#grdResults');
+      const removeBtn = await findRemoveButton(userFrame);
+      if (!removeBtn) {
+        throw new Error('Remove button not found in user list iframe');
+      }
+
+      await Promise.all([
+        page.waitForNetworkIdle({ idleTime: 500, timeout: 20_000 }).catch(() => null),
+        removeBtn.click(),
+      ]);
+
+      await userFrame.waitForSelector('#grdResults, table', { timeout: 20_000 }).catch(() => null);
     }
 
     const notFound: string[] = [];
     for (const [key, originalUserName] of requestedByKey.entries()) {
       if (!matchedKeys.has(key)) notFound.push(originalUserName);
     }
+
     return { notFound };
   } finally {
     if (page) {
       try {
         await page.close();
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
   }
 }

@@ -155,7 +155,50 @@ export default class UsersRemoveProjectRole extends BaseSessionCommand {
       if (flags.json) {
         return results;
       }
-      this.log('Done.');
+
+      const removedCount = results.filter(
+        (r) =>
+          r.status === 'success' &&
+          !r.message?.includes('Not found') &&
+          !r.message?.includes('Dry run'),
+      ).length;
+      const dryRunCount = results.filter(
+        (r) => r.status === 'success' && r.message?.includes('Dry run'),
+      ).length;
+      const skippedCount = results.filter(
+        (r) => r.status === 'success' && r.message?.includes('Not found'),
+      ).length;
+      const failedCount = results.filter((r) => r.status === 'failed').length;
+
+      if (flags['dry-run']) {
+        this.log(
+          `\n[Dry run] Would remove: ${dryRunCount}, Not found (skipped): ${skippedCount}, Failed: ${failedCount}`,
+        );
+      } else {
+        this.log(
+          `\nSummary: ${removedCount} removed, ${skippedCount} not found (skipped), ${failedCount} failed.`,
+        );
+      }
+
+      if (failedCount > 0 && !flags.verbose) {
+        this.log('\nFailed items:');
+        for (const item of results.filter((r) => r.status === 'failed')) {
+          this.log(
+            `  - ${item.userName} (${item.roleName} in ${item.projectName}): ${item.message}`,
+          );
+        }
+      }
+
+      if (skippedCount > 0 && !flags.verbose) {
+        this.log('\nNot found / skipped items:');
+        for (const item of results.filter(
+          (r) => r.status === 'success' && r.message?.includes('Not found'),
+        )) {
+          this.log(
+            `  - ${item.userName} not found in role '${item.roleName}' in project '${item.projectName}'`,
+          );
+        }
+      }
     } finally {
       await browserManager.closeBrowser();
     }
