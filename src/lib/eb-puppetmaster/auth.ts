@@ -571,7 +571,17 @@ export function copyChromeProfileForImport(
     }
   }
 
-  const dirsToCopy = ['Network', 'Local Storage', 'Session Storage', 'IndexedDB'];
+  const dirsToCopy = [
+    'Network',
+    'Local Storage',
+    'Session Storage',
+    'IndexedDB',
+    'Extensions',
+    'Extension State',
+    'Extension Rules',
+    'Local Extension Settings',
+    'Sync Extension Settings',
+  ];
   for (const dir of dirsToCopy) {
     const srcSubDir = path.join(profileSrc, dir);
     if (fs.existsSync(srcSubDir)) {
@@ -705,7 +715,7 @@ export async function importSessionFromChrome(
     browser = await puppeteer.launch({
       headless,
       channel: 'chrome',
-      ignoreDefaultArgs: ['--enable-automation'],
+      ignoreDefaultArgs: ['--enable-automation', '--disable-extensions'],
       args: launchArgs,
     });
 
