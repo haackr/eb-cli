@@ -142,8 +142,7 @@ export async function refreshSessionIfNeeded(
   headless: boolean = true,
 ): Promise<boolean> {
   const session = db.getSessionById(sessionId) as
-    | { environment: string; session_cookies: string }
-    | undefined;
+    { environment: string; session_cookies: string } | undefined;
   if (!session) return false;
 
   const env = eb.getEnvironment(session.environment);
