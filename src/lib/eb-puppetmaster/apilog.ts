@@ -134,9 +134,7 @@ async function openDetailAndRead(
     return await detailPage.evaluate(() => {
       const getValue = (suffix: string): string | null => {
         const el = document.querySelector(`[id$="${suffix}"]`) as
-          | HTMLInputElement
-          | HTMLTextAreaElement
-          | null;
+          HTMLInputElement | HTMLTextAreaElement | null;
         if (!el) return null;
         return el.value ?? null;
       };

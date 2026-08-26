@@ -378,9 +378,7 @@ async function setUserFieldsOnPage(
       if (builtIn) {
         if (builtIn.kind === 'text') {
           const element = document.querySelector(builtIn.selector) as
-            | HTMLInputElement
-            | HTMLTextAreaElement
-            | null;
+            HTMLInputElement | HTMLTextAreaElement | null;
           if (element) {
             setTextValue(element, rawValue);
             updated = true;
