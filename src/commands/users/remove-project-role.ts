@@ -63,7 +63,7 @@ export default class UsersRemoveProjectRole extends BaseSessionCommand {
     const { args, flags } = await this.parse(UsersRemoveProjectRole);
     const session = await this.getSession(flags);
     const env = eb.getEnvironment(session.environment);
-    const cookies = await this.getSessionCookies(session.id, !flags['show-browser']);
+    let cookies = await this.getSessionCookies(session.id, !flags['show-browser']);
     const browserManager = eb.BrowserManager.getInstance();
     const browser = await browserManager.getBrowser(
       !flags['show-browser'],
@@ -86,11 +86,15 @@ export default class UsersRemoveProjectRole extends BaseSessionCommand {
       for (const row of rows) {
         const { projectName, roleName, userName } = row;
         if (!projectName || !roleName || !userName) continue;
-        const key = `${projectName}|||${roleName}`;
+        const key = `${projectName.trim()}|||${roleName.trim()}`;
         if (!groupMap.has(key)) {
-          groupMap.set(key, { projectName, roleName, users: [] });
+          groupMap.set(key, {
+            projectName: projectName.trim(),
+            roleName: roleName.trim(),
+            users: [],
+          });
         }
-        groupMap.get(key)!.users.push(userName);
+        groupMap.get(key)!.users.push(userName.trim());
       }
 
       const groupList = Array.from(groupMap.values());
@@ -98,10 +102,17 @@ export default class UsersRemoveProjectRole extends BaseSessionCommand {
       const results: RemoveProjectRoleResult[] = [];
       const progress =
         !flags.verbose &&
+        !this.jsonEnabled() &&
         new cliProgress.SingleBar({ clearOnComplete: true }, cliProgress.Presets.shades_classic);
       if (progress) progress.start(total, 0);
 
+      let refreshCounter = 0;
       for (const group of groupList) {
+        if (refreshCounter % 10 === 0) {
+          cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
+        }
+        refreshCounter++;
+
         const { projectName, roleName, users } = group;
         let status: RemoveProjectRoleResult['status'] = 'success';
         let message = '';
@@ -115,9 +126,9 @@ export default class UsersRemoveProjectRole extends BaseSessionCommand {
             userNames: users,
             dryRun: Boolean(flags['dry-run']),
           });
-          const notFoundSet = new Set(notFound);
+          const notFoundSet = new Set(notFound.map((u) => u.trim().toLowerCase()));
           for (const userName of users) {
-            const skipped = notFoundSet.has(userName);
+            const skipped = notFoundSet.has(userName.trim().toLowerCase());
             message = skipped ? 'Not found (skipped)' : flags['dry-run'] ? 'Dry run' : 'Removed';
             status = 'success';
             if (flags.verbose)
