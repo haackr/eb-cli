@@ -31,12 +31,28 @@ async function clearFieldsByNames(
   fieldNames: string[],
 ): Promise<{ clearedFields: string[]; notFoundFields: string[] }> {
   return await page.evaluate((names) => {
-    const normalize = (value: string | null | undefined): string =>
-      (value ?? '').trim().toLowerCase().replaceAll(/\s+/g, ' ');
+    const normalizeText = (value: string | null | undefined): string => {
+      if (!value) return '';
+      return value
+        .toLowerCase()
+        .replace(/&nbsp;/g, ' ')
+        .replace(/[\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/g, ' ')
+        .replace(/[†*:]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
 
     const cleanLabel = (value: string | null | undefined): string => {
-      const normalized = normalize(value).replace(/:$/g, '').replace(/\?$/g, '').trim();
-      return normalized;
+      const norm = normalizeText(value);
+      return norm
+        .replace(/^(?:\d+[\s.)-]+|[•\-*]\s*)/, '')
+        .replace(/[?:*!]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+
+    const superClean = (value: string | null | undefined): string => {
+      return cleanLabel(value).replace(/[^a-z0-9]/g, '');
     };
 
     const isFieldControl = (
@@ -56,12 +72,12 @@ async function clearFieldsByNames(
       el.dispatchEvent(new Event('blur', { bubbles: true }));
     };
 
-    const clearInput = (input: HTMLInputElement): void => {
+    const clearNativeInput = (input: HTMLInputElement): void => {
       const type = input.type.toLowerCase();
       if (type === 'radio' || type === 'checkbox') {
         input.checked = false;
+        input.defaultChecked = false;
       } else {
-        // Use native setter to mimic user edits for frameworks that watch value setters.
         const valueSetter = Object.getOwnPropertyDescriptor(
           HTMLInputElement.prototype,
           'value',
@@ -80,77 +96,263 @@ async function clearFieldsByNames(
         }
         select.selectedIndex = -1;
       } else {
-        const emptyOption = Array.from(select.options).find((option) => option.value === '');
+        const emptyOption = Array.from(select.options).find(
+          (option) =>
+            option.value === '' ||
+            option.text.trim() === '' ||
+            /^--\s*select|^select|^none/i.test(option.text.trim()),
+        );
         if (emptyOption) {
-          select.value = '';
+          select.value = emptyOption.value;
+          emptyOption.selected = true;
         } else {
           select.selectedIndex = -1;
+          select.value = '';
         }
       }
       fireEvents(select);
     };
 
-    const clearDateInputCompanions = (row: Element): void => {
-      const dateInputs = Array.from(
-        row.querySelectorAll('input[id$="_dateInput"]'),
-      ) as HTMLInputElement[];
-
-      for (const dateInput of dateInputs) {
-        dateInput.value = '';
-        fireEvents(dateInput);
-
-        const wrapper = dateInput.closest('[id$="_wrapper"]');
-        if (!wrapper) continue;
-
-        const rawId = wrapper.id.replace(/_wrapper$/, '');
-        const hiddenRaw = document.getElementById(rawId);
-        if (hiddenRaw instanceof HTMLInputElement) {
-          hiddenRaw.value = '';
-          fireEvents(hiddenRaw);
-        }
-
-        const clientState = document.getElementById(`${rawId}_dateInput_ClientState`);
-        if (clientState instanceof HTMLInputElement) {
-          clientState.value = '';
-        }
-      }
-    };
-
-    const clearLookupOrFileCompanions = (row: Element): boolean => {
+    const clearTelerikRadComboBox = (container: Element): boolean => {
       let cleared = false;
+      const combos = Array.from(
+        container.querySelectorAll('.RadComboBox, [id$="_Input"], [id$="_DropDown"]'),
+      );
 
-      const removeLinks = Array.from(row.querySelectorAll('a')).filter((a) => {
-        const text = normalize(a.textContent);
-        const onclick = normalize(a.getAttribute('onclick'));
-        return (
-          text.includes('remove') || onclick.includes('clear') || onclick.includes('deletefile')
-        );
-      });
-
-      for (const link of removeLinks) {
-        if ((link as HTMLElement).offsetParent === null) continue;
-        (link as HTMLElement).click();
-        cleared = true;
+      const baseIds = new Set<string>();
+      for (const el of combos) {
+        if (el.id) {
+          const baseId = el.id.replace(/_Input$|_DropDown$|_Arrow$|_wrapper$/, '');
+          baseIds.add(baseId);
+        }
       }
 
-      const hiddenInputs = Array.from(
-        row.querySelectorAll('input[type="hidden"]'),
-      ) as HTMLInputElement[];
-      for (const hiddenInput of hiddenInputs) {
-        if (hiddenInput.value !== '') {
-          hiddenInput.value = '';
-          fireEvents(hiddenInput);
+      for (const baseId of baseIds) {
+        const comboObj = (window as any).$find ? (window as any).$find(baseId) : null;
+        if (comboObj) {
+          try {
+            if (typeof comboObj.clearSelection === 'function') comboObj.clearSelection();
+            if (typeof comboObj.set_text === 'function') comboObj.set_text('');
+            if (typeof comboObj.set_value === 'function') comboObj.set_value('');
+            if (typeof comboObj.commitChanges === 'function') comboObj.commitChanges();
+          } catch {}
+          cleared = true;
+        }
+
+        const visibleInput = document.getElementById(`${baseId}_Input`) as HTMLInputElement | null;
+        if (visibleInput) {
+          clearNativeInput(visibleInput);
+          cleared = true;
+        }
+
+        const valueInput = (document.getElementById(`${baseId}_Value`) ||
+          container.querySelector(`input[name$="${baseId}_Value"]`)) as HTMLInputElement | null;
+        if (valueInput) {
+          valueInput.value = '';
+          cleared = true;
+        }
+
+        const clientState = (document.getElementById(`${baseId}_ClientState`) ||
+          container.querySelector(
+            `input[name$="${baseId}_ClientState"]`,
+          )) as HTMLInputElement | null;
+        if (clientState) {
+          clientState.value = '{"logEntries":[],"value":"","text":""}';
           cleared = true;
         }
       }
 
-      const disabledTextInputs = Array.from(
-        row.querySelectorAll('input[type="text"][disabled]'),
-      ) as HTMLInputElement[];
-      for (const disabledTextInput of disabledTextInputs) {
-        if (disabledTextInput.value !== '') {
-          disabledTextInput.value = '';
-          fireEvents(disabledTextInput);
+      return cleared;
+    };
+
+    const clearTelerikRadNumericOrInput = (container: Element): boolean => {
+      let cleared = false;
+      const radInputs = Array.from(
+        container.querySelectorAll('.RadInput, .riTextBox, [id$="_text"], [id$="_ClientState"]'),
+      );
+
+      const baseIds = new Set<string>();
+      for (const el of radInputs) {
+        if (el.id) {
+          const baseId = el.id.replace(/_wrapper$|_text$|_ClientState$|_Value$/, '');
+          baseIds.add(baseId);
+        }
+      }
+
+      for (const baseId of baseIds) {
+        const radObj = (window as any).$find ? (window as any).$find(baseId) : null;
+        if (radObj) {
+          try {
+            if (typeof radObj.clear === 'function') radObj.clear();
+            if (typeof radObj.set_value === 'function') radObj.set_value('');
+          } catch {}
+          cleared = true;
+        }
+
+        const textInput = (document.getElementById(`${baseId}_text`) ||
+          document.getElementById(baseId)) as HTMLInputElement | null;
+        if (textInput && textInput.type !== 'hidden') {
+          clearNativeInput(textInput);
+          cleared = true;
+        }
+
+        const rawInput = document.getElementById(baseId) as HTMLInputElement | null;
+        if (rawInput && rawInput !== textInput) {
+          rawInput.value = '';
+          cleared = true;
+        }
+
+        const valInput = document.getElementById(`${baseId}_Value`) as HTMLInputElement | null;
+        if (valInput) {
+          valInput.value = '';
+          cleared = true;
+        }
+
+        const clientState = document.getElementById(
+          `${baseId}_ClientState`,
+        ) as HTMLInputElement | null;
+        if (clientState) {
+          clientState.value =
+            '{"enabled":true,"emptyMessage":"","validationText":"","valueAsString":"","lastValueAsString":""}';
+          cleared = true;
+        }
+      }
+
+      return cleared;
+    };
+
+    const clearTelerikRadDatePicker = (container: Element): boolean => {
+      let cleared = false;
+      const dateInputs = Array.from(
+        container.querySelectorAll('input[id$="_dateInput"], [id$="_rdpDate_wrapper"], .RadPicker'),
+      );
+
+      const baseIds = new Set<string>();
+      for (const el of dateInputs) {
+        if (el.id) {
+          const baseId = el.id.replace(
+            /_dateInput$|_wrapper$|_dateInput_ClientState$|_ClientState$/,
+            '',
+          );
+          baseIds.add(baseId);
+        }
+      }
+
+      for (const baseId of baseIds) {
+        const pickerObj = (window as any).$find ? (window as any).$find(baseId) : null;
+        if (pickerObj) {
+          try {
+            if (typeof pickerObj.clear === 'function') pickerObj.clear();
+            if (typeof pickerObj.set_selectedDate === 'function') pickerObj.set_selectedDate(null);
+          } catch {}
+          cleared = true;
+        }
+
+        const dateInputEl = document.getElementById(
+          `${baseId}_dateInput`,
+        ) as HTMLInputElement | null;
+        if (dateInputEl) {
+          clearNativeInput(dateInputEl);
+          cleared = true;
+        }
+
+        const rawDateEl = document.getElementById(baseId) as HTMLInputElement | null;
+        if (rawDateEl) {
+          rawDateEl.value = '';
+          cleared = true;
+        }
+
+        const dateClientState = document.getElementById(
+          `${baseId}_dateInput_ClientState`,
+        ) as HTMLInputElement | null;
+        if (dateClientState) {
+          dateClientState.value = '';
+          cleared = true;
+        }
+
+        const pickerClientState = document.getElementById(
+          `${baseId}_ClientState`,
+        ) as HTMLInputElement | null;
+        if (pickerClientState) {
+          pickerClientState.value = '';
+          cleared = true;
+        }
+      }
+
+      return cleared;
+    };
+
+    const clearRichTextOrEditor = (container: Element): boolean => {
+      let cleared = false;
+      const editors = Array.from(container.querySelectorAll('.RadEditor, [id$="_RadEditor"]'));
+      for (const el of editors) {
+        if (el.id) {
+          const editorObj = (window as any).$find ? (window as any).$find(el.id) : null;
+          if (editorObj && typeof editorObj.set_html === 'function') {
+            try {
+              editorObj.set_html('');
+              cleared = true;
+            } catch {}
+          }
+        }
+      }
+
+      const iframes = Array.from(container.querySelectorAll('iframe'));
+      for (const iframe of iframes) {
+        try {
+          if (iframe.contentDocument?.body) {
+            iframe.contentDocument.body.innerHTML = '';
+            cleared = true;
+          }
+        } catch {}
+      }
+
+      const editables = Array.from(container.querySelectorAll('[contenteditable="true"]'));
+      for (const editable of editables) {
+        (editable as HTMLElement).innerHTML = '';
+        cleared = true;
+      }
+
+      return cleared;
+    };
+
+    const clearLookupOrAttachment = (container: Element): boolean => {
+      let cleared = false;
+
+      const removeControls = Array.from(
+        container.querySelectorAll('a, button, input[type="button"], img, span[role="button"]'),
+      ).filter((el) => {
+        const text = normalizeText(el.textContent);
+        const onclick = normalizeText(el.getAttribute('onclick'));
+        const title = normalizeText(el.getAttribute('title'));
+        const ariaLabel = normalizeText(el.getAttribute('aria-label'));
+        const alt = normalizeText(el.getAttribute('alt'));
+        const combined = `${text} ${onclick} ${title} ${ariaLabel} ${alt}`;
+        return (
+          combined.includes('remove') ||
+          combined.includes('clear') ||
+          combined.includes('delete') ||
+          combined.includes('deletefile') ||
+          combined.includes('reset')
+        );
+      });
+
+      for (const ctrl of removeControls) {
+        if ((ctrl as HTMLElement).offsetParent === null) continue;
+        try {
+          (ctrl as HTMLElement).click();
+          cleared = true;
+        } catch {}
+      }
+
+      const displaySpans = Array.from(
+        container.querySelectorAll(
+          'span[id$="_lblText"], span[id$="_lblName"], span[id$="_lblSelected"], span.lookup-display',
+        ),
+      );
+      for (const span of displaySpans) {
+        if (span.textContent?.trim()) {
+          span.textContent = '';
           cleared = true;
         }
       }
@@ -160,19 +362,35 @@ async function clearFieldsByNames(
 
     const clearByRow = (row: Element): boolean => {
       let cleared = false;
+      const detailsCell = row.querySelector('td.Details, td.details') ?? row;
 
-      const detailsCell = row.querySelector('td.Details') ?? row;
+      if (clearTelerikRadComboBox(detailsCell)) cleared = true;
+      if (clearTelerikRadNumericOrInput(detailsCell)) cleared = true;
+      if (clearTelerikRadDatePicker(detailsCell)) cleared = true;
+      if (clearRichTextOrEditor(detailsCell)) cleared = true;
+      if (clearLookupOrAttachment(detailsCell)) cleared = true;
 
       const radios = Array.from(
         detailsCell.querySelectorAll('input[type="radio"]'),
       ) as HTMLInputElement[];
-      if (radios.length > 0) {
-        for (const radio of radios) {
-          if (radio.checked) {
-            radio.checked = false;
-            fireEvents(radio);
-            cleared = true;
-          }
+      for (const radio of radios) {
+        if (radio.checked) {
+          radio.checked = false;
+          radio.defaultChecked = false;
+          fireEvents(radio);
+          cleared = true;
+        }
+      }
+
+      const checkboxes = Array.from(
+        detailsCell.querySelectorAll('input[type="checkbox"]'),
+      ) as HTMLInputElement[];
+      for (const cb of checkboxes) {
+        if (cb.checked) {
+          cb.checked = false;
+          cb.defaultChecked = false;
+          fireEvents(cb);
+          cleared = true;
         }
       }
 
@@ -187,6 +405,7 @@ async function clearFieldsByNames(
       ) as HTMLTextAreaElement[];
       for (const textarea of textareas) {
         textarea.value = '';
+        textarea.defaultValue = '';
         fireEvents(textarea);
         cleared = true;
       }
@@ -205,65 +424,46 @@ async function clearFieldsByNames(
           continue;
         }
 
-        clearInput(input);
+        clearNativeInput(input);
         cleared = true;
       }
 
-      clearDateInputCompanions(detailsCell);
-      if (detailsCell.querySelector('input[id$="_dateInput"]')) {
-        cleared = true;
-      }
+      const hiddenInputs = Array.from(
+        detailsCell.querySelectorAll('input[type="hidden"]'),
+      ) as HTMLInputElement[];
+      for (const hiddenInput of hiddenInputs) {
+        const id = (hiddenInput.id || '').toLowerCase();
+        const name = (hiddenInput.name || '').toLowerCase();
+        if (
+          id.includes('__viewstate') ||
+          id.includes('__eventvalidation') ||
+          id.includes('__asyncpost') ||
+          name.includes('__viewstate') ||
+          name.includes('__eventvalidation')
+        ) {
+          continue;
+        }
 
-      if (clearLookupOrFileCompanions(detailsCell)) {
-        cleared = true;
+        if (hiddenInput.value !== '') {
+          hiddenInput.value = '';
+          cleared = true;
+        }
       }
 
       return cleared;
-    };
-
-    const dataFieldsContainer =
-      document.getElementById('ctl00_contentSection_dataFields') ?? document;
-
-    const isVisible = (el: Element | null): boolean => {
-      if (!(el instanceof HTMLElement)) return false;
-      if (el.offsetParent === null) return false;
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-      return el.getClientRects().length > 0;
-    };
-
-    const getEditableControls = (
-      container: Element,
-    ): Array<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement> => {
-      const controls = Array.from(
-        container.querySelectorAll(
-          'input:not([type="hidden"]):not([type="button"]):not([type="submit"]), textarea, select',
-        ),
-      ).filter(isFieldControl);
-
-      return controls.filter((control) => {
-        if (control instanceof HTMLSelectElement) {
-          return !control.disabled;
-        }
-
-        if (control instanceof HTMLTextAreaElement) {
-          return !control.disabled && !control.readOnly;
-        }
-
-        const type = control.type.toLowerCase();
-        if (type === 'radio' || type === 'checkbox') {
-          return !control.disabled;
-        }
-
-        return !control.disabled && !control.readOnly;
-      });
     };
 
     const isControlBlank = (
       control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
     ): boolean => {
       if (control instanceof HTMLSelectElement) {
-        return control.value.trim() === '' || control.selectedIndex < 0;
+        return (
+          control.value.trim() === '' ||
+          control.selectedIndex < 0 ||
+          /^--\s*select|^select|^none/i.test(
+            control.options[control.selectedIndex]?.text?.trim() ?? '',
+          )
+        );
       }
 
       if (control instanceof HTMLTextAreaElement) {
@@ -278,108 +478,106 @@ async function clearFieldsByNames(
       return control.value.trim() === '';
     };
 
+    const isRowBlank = (row: Element): boolean => {
+      const detailsCell = row.querySelector('td.Details, td.details') ?? row;
+
+      const controls = Array.from(
+        detailsCell.querySelectorAll(
+          'input:not([type="hidden"]):not([type="button"]):not([type="submit"]), textarea, select',
+        ),
+      ).filter(isFieldControl);
+
+      for (const ctrl of controls) {
+        if (!isControlBlank(ctrl)) return false;
+      }
+
+      const rcbValues = Array.from(
+        detailsCell.querySelectorAll('input[id$="_Value"]'),
+      ) as HTMLInputElement[];
+      for (const rcbVal of rcbValues) {
+        if (rcbVal.value.trim() !== '') return false;
+      }
+
+      const displaySpans = Array.from(
+        detailsCell.querySelectorAll(
+          'span[id$="_lblText"], span[id$="_lblName"], span[id$="_lblSelected"], span.lookup-display',
+        ),
+      );
+      for (const span of displaySpans) {
+        if (span.textContent?.trim() !== '') return false;
+      }
+
+      return true;
+    };
+
+    const dataFieldsContainer =
+      document.getElementById('ctl00_contentSection_dataFields') ||
+      document.querySelector('[id$="_dataFields"]') ||
+      document;
+
     const findRowsByFieldName = (fieldName: string): Element[] => {
-      const target = cleanLabel(fieldName);
+      const targetNorm = normalizeText(fieldName);
+      const targetClean = cleanLabel(fieldName);
+      const targetSuper = superClean(fieldName);
+
       const rows = Array.from(dataFieldsContainer.querySelectorAll('tr'));
-      const matches: Element[] = [];
+      const matchesWithScore: Array<{ row: Element; score: number }> = [];
 
       for (const row of rows) {
-        const labelCell = row.querySelector('td.Label');
+        const labelCell = row.querySelector(
+          'td.Label, th.Label, td[class*="Label" i], th[class*="Label" i], td[class*="label" i]',
+        );
         if (!labelCell) continue;
 
-        const labelText = cleanLabel(labelCell.textContent);
-        if (!labelText) continue;
+        const cellNorm = normalizeText(labelCell.textContent);
+        const cellClean = cleanLabel(labelCell.textContent);
+        const cellSuper = superClean(labelCell.textContent);
 
-        if (labelText === target) {
-          matches.push(row);
+        let score = 0;
+        if (cellNorm === targetNorm && targetNorm.length > 0) {
+          score = 100;
+        } else if (cellClean === targetClean && targetClean.length > 0) {
+          score = 90;
+        } else if (cellSuper === targetSuper && targetSuper.length > 0) {
+          score = 80;
+        } else if (
+          targetClean.length > 3 &&
+          (cellClean.startsWith(targetClean) || targetClean.startsWith(cellClean))
+        ) {
+          score = 70;
+        }
+
+        if (score > 0) {
+          matchesWithScore.push({ row, score });
         }
       }
 
-      return matches.sort((a, b) => {
-        const aDetails = a.querySelector('td.Details') ?? a;
-        const bDetails = b.querySelector('td.Details') ?? b;
-        const aControls = getEditableControls(aDetails);
-        const bControls = getEditableControls(bDetails);
+      if (matchesWithScore.length === 0) {
+        const allLabels = Array.from(document.querySelectorAll('label'));
+        for (const lbl of allLabels) {
+          const lblNorm = normalizeText(lbl.textContent);
+          const lblClean = cleanLabel(lbl.textContent);
+          const lblSuper = superClean(lbl.textContent);
 
-        const aVisible = isVisible(a) ? 1 : 0;
-        const bVisible = isVisible(b) ? 1 : 0;
-        if (aVisible !== bVisible) return bVisible - aVisible;
+          let score = 0;
+          if (lblNorm === targetNorm && targetNorm.length > 0) {
+            score = 95;
+          } else if (lblClean === targetClean && targetClean.length > 0) {
+            score = 85;
+          } else if (lblSuper === targetSuper && targetSuper.length > 0) {
+            score = 75;
+          }
 
-        const aHasNonBlank = aControls.some((control) => !isControlBlank(control)) ? 1 : 0;
-        const bHasNonBlank = bControls.some((control) => !isControlBlank(control)) ? 1 : 0;
-        if (aHasNonBlank !== bHasNonBlank) return bHasNonBlank - aHasNonBlank;
-
-        if (aControls.length !== bControls.length) return bControls.length - aControls.length;
-        return 0;
-      });
-    };
-
-    const allControls = Array.from(
-      dataFieldsContainer.querySelectorAll('input:not([type="hidden"]), textarea, select'),
-    ).filter(isFieldControl);
-
-    const findControlByAttributes = (
-      name: string,
-    ): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null => {
-      const target = normalize(name);
-
-      for (const control of allControls) {
-        const attributes = [
-          control.id,
-          control.getAttribute('name'),
-          control.getAttribute('aria-label'),
-          control.getAttribute('placeholder'),
-          control.getAttribute('title'),
-          (control as HTMLInputElement).labels?.[0]?.textContent ?? null,
-        ];
-
-        for (const attr of attributes) {
-          const normalizedAttr = normalize(attr);
-          if (!normalizedAttr) continue;
-          if (normalizedAttr === target) {
-            return control;
+          if (score > 0) {
+            const container = lbl.closest('tr, li, .form-group, .field, td, div');
+            if (container) {
+              matchesWithScore.push({ row: container, score });
+            }
           }
         }
       }
 
-      return null;
-    };
-
-    const findControlByLabel = (
-      name: string,
-    ): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null => {
-      const target = normalize(name);
-      const labels = Array.from(document.querySelectorAll('label'));
-
-      for (const label of labels) {
-        const labelText = normalize(label.textContent);
-        if (labelText !== target) {
-          continue;
-        }
-
-        const htmlFor = label.getAttribute('for');
-        if (htmlFor) {
-          const byFor = document.getElementById(htmlFor);
-          if (isFieldControl(byFor)) return byFor;
-        }
-
-        const nestedControl = label.querySelector('input:not([type="hidden"]), textarea, select');
-        if (isFieldControl(nestedControl)) {
-          return nestedControl;
-        }
-
-        const container = label.closest('tr, li, .form-group, .field, td, div');
-        if (container) {
-          const nearControl = container.querySelector(
-            'input:not([type="hidden"]), textarea, select',
-          );
-          if (isFieldControl(nearControl)) {
-            return nearControl;
-          }
-        }
-      }
-
-      return null;
+      return matchesWithScore.sort((a, b) => b.score - a.score).map((m) => m.row);
     };
 
     const clearedFields: string[] = [];
@@ -388,36 +586,44 @@ async function clearFieldsByNames(
     for (const fieldName of names) {
       const rows = findRowsByFieldName(fieldName);
       if (rows.length > 0) {
-        let rowCleared = false;
+        let anyRowCleared = false;
         for (const row of rows) {
-          const detailsCell = row.querySelector('td.Details') ?? row;
-          const editableControlsBefore = getEditableControls(detailsCell);
-          const hadNonBlankBefore = editableControlsBefore.some(
-            (control) => !isControlBlank(control),
-          );
-
-          if (!clearByRow(row)) {
-            continue;
-          }
-
-          const editableControlsAfter = getEditableControls(detailsCell);
-          const isBlankAfter =
-            editableControlsAfter.length === 0 ||
-            editableControlsAfter.every((control) => isControlBlank(control));
-
-          if (isBlankAfter || hadNonBlankBefore) {
-            rowCleared = true;
-            break;
+          if (clearByRow(row)) {
+            anyRowCleared = true;
           }
         }
 
-        if (rowCleared) {
+        if (anyRowCleared || rows.some(isRowBlank)) {
           clearedFields.push(fieldName);
           continue;
         }
       }
 
-      const control = findControlByAttributes(fieldName) ?? findControlByLabel(fieldName);
+      const targetNorm = normalizeText(fieldName);
+      const allControls = Array.from(
+        dataFieldsContainer.querySelectorAll('input:not([type="hidden"]), textarea, select'),
+      ).filter(isFieldControl);
+
+      let control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null = null;
+      for (const ctrl of allControls) {
+        const attributes = [
+          ctrl.id,
+          ctrl.getAttribute('name'),
+          ctrl.getAttribute('aria-label'),
+          ctrl.getAttribute('placeholder'),
+          ctrl.getAttribute('title'),
+          (ctrl as HTMLInputElement).labels?.[0]?.textContent ?? null,
+        ];
+
+        for (const attr of attributes) {
+          if (normalizeText(attr) === targetNorm || cleanLabel(attr) === cleanLabel(fieldName)) {
+            control = ctrl;
+            break;
+          }
+        }
+        if (control) break;
+      }
+
       if (!control) {
         notFoundFields.push(fieldName);
         continue;
@@ -429,7 +635,7 @@ async function clearFieldsByNames(
         control.value = '';
         fireEvents(control);
       } else {
-        clearInput(control);
+        clearNativeInput(control);
       }
       clearedFields.push(fieldName);
     }
@@ -443,12 +649,28 @@ async function findFieldsStillPopulated(
   fieldNames: string[],
 ): Promise<string[]> {
   return await page.evaluate((names) => {
-    const normalize = (value: string | null | undefined): string =>
-      (value ?? '').trim().toLowerCase().replaceAll(/\s+/g, ' ');
+    const normalizeText = (value: string | null | undefined): string => {
+      if (!value) return '';
+      return value
+        .toLowerCase()
+        .replace(/&nbsp;/g, ' ')
+        .replace(/[\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/g, ' ')
+        .replace(/[†*:]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
 
     const cleanLabel = (value: string | null | undefined): string => {
-      const normalized = normalize(value).replace(/:$/g, '').replace(/\?$/g, '').trim();
-      return normalized;
+      const norm = normalizeText(value);
+      return norm
+        .replace(/^(?:\d+[\s.)-]+|[•\-*]\s*)/, '')
+        .replace(/[?:*!]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+
+    const superClean = (value: string | null | undefined): string => {
+      return cleanLabel(value).replace(/[^a-z0-9]/g, '');
     };
 
     const isFieldControl = (
@@ -466,7 +688,13 @@ async function findFieldsStillPopulated(
       control: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
     ): boolean => {
       if (control instanceof HTMLSelectElement) {
-        return control.value.trim() === '' || control.selectedIndex < 0;
+        return (
+          control.value.trim() === '' ||
+          control.selectedIndex < 0 ||
+          /^--\s*select|^select|^none/i.test(
+            control.options[control.selectedIndex]?.text?.trim() ?? '',
+          )
+        );
       }
 
       if (control instanceof HTMLTextAreaElement) {
@@ -481,107 +709,71 @@ async function findFieldsStillPopulated(
       return control.value.trim() === '';
     };
 
-    const dataFieldsContainer =
-      document.getElementById('ctl00_contentSection_dataFields') ?? document;
+    const isRowBlank = (row: Element): boolean => {
+      const detailsCell = row.querySelector('td.Details, td.details') ?? row;
 
-    const isVisible = (el: Element | null): boolean => {
-      if (!(el instanceof HTMLElement)) return false;
-      if (el.offsetParent === null) return false;
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
-      return el.getClientRects().length > 0;
+      const controls = Array.from(
+        detailsCell.querySelectorAll(
+          'input:not([type="hidden"]):not([type="button"]):not([type="submit"]), textarea, select',
+        ),
+      ).filter(isFieldControl);
+
+      for (const ctrl of controls) {
+        if (!isControlBlank(ctrl)) return false;
+      }
+
+      const rcbValues = Array.from(
+        detailsCell.querySelectorAll('input[id$="_Value"]'),
+      ) as HTMLInputElement[];
+      for (const rcbVal of rcbValues) {
+        if (rcbVal.value.trim() !== '') return false;
+      }
+
+      const displaySpans = Array.from(
+        detailsCell.querySelectorAll(
+          'span[id$="_lblText"], span[id$="_lblName"], span[id$="_lblSelected"], span.lookup-display',
+        ),
+      );
+      for (const span of displaySpans) {
+        if (span.textContent?.trim() !== '') return false;
+      }
+
+      return true;
     };
 
+    const dataFieldsContainer =
+      document.getElementById('ctl00_contentSection_dataFields') ||
+      document.querySelector('[id$="_dataFields"]') ||
+      document;
+
     const findRowsByFieldName = (fieldName: string): Element[] => {
-      const target = cleanLabel(fieldName);
+      const targetNorm = normalizeText(fieldName);
+      const targetClean = cleanLabel(fieldName);
+      const targetSuper = superClean(fieldName);
+
       const rows = Array.from(dataFieldsContainer.querySelectorAll('tr'));
       const matches: Element[] = [];
 
       for (const row of rows) {
-        const labelCell = row.querySelector('td.Label');
+        const labelCell = row.querySelector(
+          'td.Label, th.Label, td[class*="Label" i], th[class*="Label" i], td[class*="label" i]',
+        );
         if (!labelCell) continue;
 
-        const labelText = cleanLabel(labelCell.textContent);
-        if (!labelText) continue;
+        const cellNorm = normalizeText(labelCell.textContent);
+        const cellClean = cleanLabel(labelCell.textContent);
+        const cellSuper = superClean(labelCell.textContent);
 
-        if (labelText === target) {
+        if (
+          (cellNorm === targetNorm && targetNorm.length > 0) ||
+          (cellClean === targetClean && targetClean.length > 0) ||
+          (cellSuper === targetSuper && targetSuper.length > 0)
+        ) {
           matches.push(row);
         }
       }
 
-      return matches.sort((a, b) => {
-        const aVisible = isVisible(a) ? 1 : 0;
-        const bVisible = isVisible(b) ? 1 : 0;
-        return bVisible - aVisible;
-      });
-    };
-
-    const allControls = Array.from(
-      dataFieldsContainer.querySelectorAll('input:not([type="hidden"]), textarea, select'),
-    ).filter(isFieldControl);
-
-    const findControlByAttributes = (
-      name: string,
-    ): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null => {
-      const target = normalize(name);
-
-      for (const control of allControls) {
-        const attributes = [
-          control.id,
-          control.getAttribute('name'),
-          control.getAttribute('aria-label'),
-          control.getAttribute('placeholder'),
-          control.getAttribute('title'),
-          (control as HTMLInputElement).labels?.[0]?.textContent ?? null,
-        ];
-
-        for (const attr of attributes) {
-          const normalizedAttr = normalize(attr);
-          if (!normalizedAttr) continue;
-          if (normalizedAttr === target) {
-            return control;
-          }
-        }
-      }
-
-      return null;
-    };
-
-    const findControlByLabel = (
-      name: string,
-    ): HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null => {
-      const target = normalize(name);
-      const labels = Array.from(document.querySelectorAll('label'));
-
-      for (const label of labels) {
-        const labelText = normalize(label.textContent);
-        if (labelText !== target) {
-          continue;
-        }
-
-        const htmlFor = label.getAttribute('for');
-        if (htmlFor) {
-          const byFor = document.getElementById(htmlFor);
-          if (isFieldControl(byFor)) return byFor;
-        }
-
-        const nestedControl = label.querySelector('input:not([type="hidden"]), textarea, select');
-        if (isFieldControl(nestedControl)) {
-          return nestedControl;
-        }
-
-        const container = label.closest('tr, li, .form-group, .field, td, div');
-        if (container) {
-          const nearControl = container.querySelector(
-            'input:not([type="hidden"]), textarea, select',
-          );
-          if (isFieldControl(nearControl)) {
-            return nearControl;
-          }
-        }
-      }
-
-      return null;
+      return matches;
     };
 
     const fieldsStillPopulated: string[] = [];
@@ -589,36 +781,34 @@ async function findFieldsStillPopulated(
     for (const fieldName of names) {
       const rows = findRowsByFieldName(fieldName);
       if (rows.length > 0) {
-        let foundPopulated = false;
-
-        for (const row of rows) {
-          const detailsCell = row.querySelector('td.Details') ?? row;
-          const rowControls = Array.from(
-            detailsCell.querySelectorAll(
-              'input:not([type="hidden"]):not([type="button"]):not([type="submit"]), textarea, select',
-            ),
-          ).filter(isFieldControl);
-
-          if (rowControls.length === 0) {
-            continue;
-          }
-
-          const allBlank = rowControls.every((control) => isControlBlank(control));
-          if (!allBlank) {
-            foundPopulated = true;
-            break;
-          }
-        }
-
-        if (foundPopulated) {
+        const anyPopulated = rows.some((row) => !isRowBlank(row));
+        if (anyPopulated) {
           fieldsStillPopulated.push(fieldName);
         }
-
         continue;
       }
 
-      const control = findControlByAttributes(fieldName) ?? findControlByLabel(fieldName);
-      if (!control || !isControlBlank(control)) {
+      const targetNorm = normalizeText(fieldName);
+      const allControls = Array.from(
+        dataFieldsContainer.querySelectorAll('input:not([type="hidden"]), textarea, select'),
+      ).filter(isFieldControl);
+
+      const control = allControls.find((ctrl) => {
+        const attributes = [
+          ctrl.id,
+          ctrl.getAttribute('name'),
+          ctrl.getAttribute('aria-label'),
+          ctrl.getAttribute('placeholder'),
+          ctrl.getAttribute('title'),
+          (ctrl as HTMLInputElement).labels?.[0]?.textContent ?? null,
+        ];
+        return attributes.some(
+          (attr) =>
+            normalizeText(attr) === targetNorm || cleanLabel(attr) === cleanLabel(fieldName),
+        );
+      });
+
+      if (control && !isControlBlank(control)) {
         fieldsStillPopulated.push(fieldName);
       }
     }
@@ -628,61 +818,66 @@ async function findFieldsStillPopulated(
 }
 
 async function clickSave(page: puppeteer.Page): Promise<void> {
+  await waitForProcessFormToSettle(page);
+
   const exactSaveSelectors = [
     '#ctl00_contentSection_btnSave',
     'input[name="ctl00$contentSection$btnSave"]',
     'input[id="ctl00_contentSection_btnSave"]',
   ];
 
+  let saveFound = false;
+
   for (const selector of exactSaveSelectors) {
     const match = await page.$(selector);
     if (!match) continue;
 
-    await match.click();
-    await Promise.race([
-      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20_000 }).catch(() => null),
-      page.waitForNetworkIdle({ idleTime: 1_000, timeout: 20_000 }).catch(() => null),
+    saveFound = true;
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 30_000 }).catch(() => null),
+      match.click(),
     ]);
-    return;
+    break;
   }
 
-  const clicked = await page.evaluate(() => {
-    const controls = Array.from(
-      document.querySelectorAll('button, input[type="button"], input[type="submit"]'),
-    );
-    const saveControl = controls.find((el) => {
-      const id = (el.getAttribute('id') ?? '').toLowerCase();
-      const name = (el.getAttribute('name') ?? '').toLowerCase();
-      const text = ((el.textContent ?? '') || (el.getAttribute('value') ?? ''))
-        .trim()
-        .toLowerCase();
+  if (!saveFound) {
+    const saveHandle = await page.evaluateHandle(() => {
+      const controls = Array.from(
+        document.querySelectorAll('button, input[type="button"], input[type="submit"]'),
+      );
       return (
-        id.includes('save') || name.includes('save') || text === 'save' || text.includes('save')
+        controls.find((el) => {
+          const id = (el.getAttribute('id') ?? '').toLowerCase();
+          const name = (el.getAttribute('name') ?? '').toLowerCase();
+          const text = ((el.textContent ?? '') || (el.getAttribute('value') ?? ''))
+            .trim()
+            .toLowerCase();
+          return (
+            id.includes('save') || name.includes('save') || text === 'save' || text.includes('save')
+          );
+        }) ?? null
       );
     });
 
-    if (!saveControl) {
-      return false;
+    const saveElement = saveHandle.asElement() as puppeteer.ElementHandle<HTMLElement> | null;
+    if (!saveElement) {
+      throw new Error('Save button not found on process instance form.');
     }
 
-    (saveControl as HTMLElement).click();
-    return true;
-  });
-
-  if (!clicked) {
-    throw new Error('Save button not found on process instance form.');
+    saveFound = true;
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 30_000 }).catch(() => null),
+      saveElement.click(),
+    ]);
   }
 
-  await Promise.race([
-    page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20_000 }).catch(() => null),
-    page.waitForNetworkIdle({ idleTime: 1_000, timeout: 20_000 }).catch(() => null),
-  ]);
+  await waitForProcessFormToSettle(page);
 }
 
 async function waitForProcessFormToSettle(page: puppeteer.Page): Promise<void> {
   await page
     .waitForSelector('#ctl00_contentSection_dataFields', {
-      timeout: 20_000,
+      timeout: 10_000,
     })
     .catch(() => null);
 
@@ -708,7 +903,29 @@ async function waitForProcessFormToSettle(page: puppeteer.Page): Promise<void> {
     )
     .catch(() => null);
 
-  await page.waitForNetworkIdle({ idleTime: 1_000, timeout: 8_000 }).catch(() => null);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  await page
+    .waitForFunction(
+      () => {
+        const pageRequestManager = (
+          window as any
+        ).Sys?.WebForms?.PageRequestManager?.getInstance?.();
+        const isAspNetPostBackIdle = !(pageRequestManager?.get_isInAsyncPostBack?.() ?? false);
+
+        const isJQueryIdle =
+          typeof (window as any).jQuery === 'undefined' ||
+          ((window as any).jQuery.active ?? 0) === 0;
+
+        return isAspNetPostBackIdle && isJQueryIdle;
+      },
+      {
+        timeout: 15_000,
+      },
+    )
+    .catch(() => null);
+
+  await page.waitForNetworkIdle({ idleTime: 500, timeout: 8_000 }).catch(() => null);
 }
 
 async function isAuthenticatedProcessPage(page: puppeteer.Page): Promise<boolean> {
@@ -768,6 +985,12 @@ export async function setProcessInstanceFieldsToNull(
     await context.setCookie(...cookies);
     page = await context.newPage();
 
+    page.on('dialog', async (dialog) => {
+      try {
+        await dialog.accept();
+      } catch {}
+    });
+
     await page.goto(requestedUrl, { waitUntil: 'networkidle0' });
     visitedUrl = page.url();
 
@@ -780,7 +1003,19 @@ export async function setProcessInstanceFieldsToNull(
     await waitForProcessFormToSettle(page);
 
     const { clearedFields, notFoundFields } = await clearFieldsByNames(page, fieldNames);
-    const fieldsStillPopulated = await findFieldsStillPopulated(page, clearedFields);
+
+    await waitForProcessFormToSettle(page);
+
+    let fieldsStillPopulated = await findFieldsStillPopulated(page, clearedFields);
+
+    let retryCount = 0;
+    while (fieldsStillPopulated.length > 0 && retryCount < 3) {
+      retryCount++;
+      await clearFieldsByNames(page, fieldsStillPopulated);
+      await waitForProcessFormToSettle(page);
+      fieldsStillPopulated = await findFieldsStillPopulated(page, clearedFields);
+    }
+
     if (fieldsStillPopulated.length > 0) {
       throw new Error(
         `Refusing to save because some fields are still populated: ${fieldsStillPopulated.join(', ')}`,
