@@ -5,15 +5,11 @@ import ora from 'ora';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
+import { parseCsv, USER_SET_SSO_ALIASES } from '../../lib/csv.js';
 
 type UserSetSsoCsvRow = {
   userId?: string;
-  userid?: string;
-  user_id?: string;
-  id?: string;
   sso?: string | boolean;
-  ssoEnabled?: string | boolean;
-  sso_enabled?: string | boolean;
 };
 
 type UserSetSsoOperation = {
@@ -64,8 +60,8 @@ function parseOperations(rows: UserSetSsoCsvRow[]): UserSetSsoOperation[] {
   const operations: UserSetSsoOperation[] = [];
 
   for (const row of rows) {
-    const userId = String(row.userId ?? row.userid ?? row.user_id ?? row.id ?? '').trim();
-    const enabled = parseBooleanLike(row.sso ?? row.ssoEnabled ?? row.sso_enabled);
+    const userId = String(row.userId ?? '').trim();
+    const enabled = parseBooleanLike(row.sso);
     if (!userId || enabled === null) {
       continue;
     }
@@ -118,12 +114,12 @@ export default class UserSetSso extends BaseSessionCommand {
     const env = eb.getEnvironment(session.environment);
 
     const csvData = fs.readFileSync(args.file, 'utf8');
-    const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
+    const parsed = parseCsv<UserSetSsoCsvRow>(csvData, USER_SET_SSO_ALIASES);
     if (parsed.errors.length > 0) {
       this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
     }
 
-    const operations = parseOperations(parsed.data as UserSetSsoCsvRow[]);
+    const operations = parseOperations(parsed.data);
     if (operations.length === 0) {
       this.error(
         'No valid rows found. CSV must include userId and sso columns where sso is true/false.',

@@ -5,6 +5,7 @@ import ora from 'ora';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
+import { parseCsv, USER_SET_FIELD_ALIASES } from '../../lib/csv.js';
 
 type UserSetFieldCsvRow = Record<string, string | boolean | null | undefined>;
 
@@ -23,8 +24,6 @@ type UserSetFieldResult = {
   message?: string;
 };
 
-const userIdAliases = new Set(['userid', 'user_id', 'userid', 'id']);
-
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -37,17 +36,14 @@ function parseOperations(rows: UserSetFieldCsvRow[]): UserSetFieldOperation[] {
   const operations: UserSetFieldOperation[] = [];
 
   for (const row of rows) {
-    const entries = Object.entries(row);
-    const userIdEntry = entries.find(([key]) => userIdAliases.has(key.trim().toLowerCase()));
-    const userId = String(userIdEntry?.[1] ?? '').trim();
+    const userId = String(row['userId'] ?? '').trim();
     if (!userId) {
       continue;
     }
 
     const fieldValues: eb.UserFieldValueMap = {};
-    for (const [key, value] of entries) {
-      const trimmedKey = key.trim();
-      if (!trimmedKey || userIdAliases.has(trimmedKey.toLowerCase())) {
+    for (const [key, value] of Object.entries(row)) {
+      if (key === 'userId') {
         continue;
       }
 
@@ -56,7 +52,7 @@ function parseOperations(rows: UserSetFieldCsvRow[]): UserSetFieldOperation[] {
         continue;
       }
 
-      fieldValues[trimmedKey] = trimmedValue;
+      fieldValues[key] = trimmedValue;
     }
 
     if (Object.keys(fieldValues).length === 0) {
@@ -108,12 +104,12 @@ export default class UserSetField extends BaseSessionCommand {
     const { args, flags } = await this.parse(UserSetField);
 
     const csvData = fs.readFileSync(args.file, 'utf8');
-    const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
+    const parsed = parseCsv<UserSetFieldCsvRow>(csvData, USER_SET_FIELD_ALIASES);
     if (parsed.errors.length > 0) {
       this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
     }
 
-    const operations = parseOperations(parsed.data as UserSetFieldCsvRow[]);
+    const operations = parseOperations(parsed.data);
     if (operations.length === 0) {
       this.error(
         'No valid rows found. CSV must include a userId column and at least one non-empty field value column per row.',

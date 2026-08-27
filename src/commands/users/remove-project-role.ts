@@ -4,6 +4,7 @@ import Papa from 'papaparse';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
+import { parseCsv, USER_REMOVE_PROJECT_ROLE_ALIASES } from '../../lib/csv.js';
 
 type RemoveProjectRoleCsvRow = {
   projectName?: string;
@@ -72,11 +73,11 @@ export default class UsersRemoveProjectRole extends BaseSessionCommand {
     try {
       // Parse CSV
       const csvData = fs.readFileSync(args.file, 'utf8');
-      const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
+      const parsed = parseCsv<RemoveProjectRoleCsvRow>(csvData, USER_REMOVE_PROJECT_ROLE_ALIASES);
       if (parsed.errors.length > 0) {
         this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
       }
-      const rows = parsed.data as RemoveProjectRoleCsvRow[];
+      const rows = parsed.data;
 
       // Group by projectName and roleName
       const groupMap = new Map<

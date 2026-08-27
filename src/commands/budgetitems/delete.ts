@@ -5,6 +5,7 @@ import ora from 'ora';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
+import { parseCsv, BUDGET_ITEM_DELETE_ALIASES } from '../../lib/csv.js';
 
 export default class BudgetitemsDelete extends BaseSessionCommand {
   static override summary = 'Delete budget items from a CSV';
@@ -48,17 +49,17 @@ export default class BudgetitemsDelete extends BaseSessionCommand {
 
     // Parse CSV
     const csvData = fs.readFileSync(args.file, 'utf8');
-    const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
-    if (parsed.errors.length > 0) {
-      this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
-    }
-    const items = parsed.data as {
+    const parsed = parseCsv<{
       portalId: string;
       itemId: string;
       budgetId?: string;
       accountCode?: string;
       projectName?: string;
-    }[];
+    }>(csvData, BUDGET_ITEM_DELETE_ALIASES);
+    if (parsed.errors.length > 0) {
+      this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
+    }
+    const items = parsed.data;
 
     // Get environment
     const env = eb.getEnvironment(session.environment);

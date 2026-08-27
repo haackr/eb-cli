@@ -5,6 +5,7 @@ import ora from 'ora';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
+import { parseCsv, USER_DELETE_ALIASES } from '../../lib/csv.js';
 
 type UserDeleteCsvRow = {
   userName?: string;
@@ -62,12 +63,12 @@ export default class UsersDelete extends BaseSessionCommand {
     const session = await this.getSession(flags);
 
     const csvData = fs.readFileSync(args.file, 'utf8');
-    const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
+    const parsed = parseCsv<UserDeleteCsvRow>(csvData, USER_DELETE_ALIASES);
     if (parsed.errors.length > 0) {
       this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
     }
 
-    const users = (parsed.data as UserDeleteCsvRow[]).filter((u) => Boolean(u.userName));
+    const users = parsed.data.filter((u) => Boolean(u.userName));
     if (users.length === 0) {
       this.error('No users found in CSV. Expected columns include userId, userName, or email.');
     }
