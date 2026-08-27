@@ -11,7 +11,8 @@ export default class BudgetitemsSet extends BaseSessionCommand {
   static override summary = 'Set budget item properties from a CSV';
   static override args = {
     file: Args.string({
-      description: 'CSV file containing budget item properties to set',
+      description:
+        'CSV file containing budget item properties (supports item IDs or project names and account codes)',
       required: true,
       // Validate the file exists early
       parse: async (input) => {
@@ -22,7 +23,8 @@ export default class BudgetitemsSet extends BaseSessionCommand {
       },
     }),
   };
-  static override description = 'Set properties for budget items from a CSV file';
+  static override description =
+    'Set properties for budget items from a CSV file (supports item IDs or project names and account codes)';
   static override examples = [
     'eb budgetitems set items.csv --session-id 1',
     'eb budgetitems set items.csv --username myuser',
@@ -50,8 +52,8 @@ export default class BudgetitemsSet extends BaseSessionCommand {
     // Parse CSV
     const csvData = fs.readFileSync(args.file, 'utf8');
     const parsed = parseCsv<{
-      portalId: string;
-      itemId: string;
+      portalId?: string;
+      itemId?: string;
       budgetId?: string;
       accountCode?: string;
       projectName?: string;
@@ -75,9 +77,12 @@ export default class BudgetitemsSet extends BaseSessionCommand {
       !flags['show-browser'],
       !flags['show-browser'] ? ['--window-size=1200,800'] : undefined,
     );
+    const context = browser.defaultBrowserContext();
+    await context.setCookie(...cookies);
+    const page = await context.newPage();
 
     const results: Array<{
-      itemId: string;
+      itemId?: string;
       portalId?: string;
       budgetId?: string;
       projectName?: string;
@@ -126,8 +131,9 @@ export default class BudgetitemsSet extends BaseSessionCommand {
           currentSpinner.stop();
           currentSpinner = null;
         }
-        // Attempt to close browser
+        // Attempt to close page and browser
         try {
+          await page.close().catch(() => {});
           await eb.BrowserManager.getInstance().closeBrowser();
         } catch {}
 
@@ -136,7 +142,7 @@ export default class BudgetitemsSet extends BaseSessionCommand {
           const rows = results.map((r) => ({
             portalId: r.portalId ?? '',
             budgetId: r.budgetId ?? '',
-            itemId: r.itemId,
+            itemId: r.itemId ?? '',
             projectName: r.projectName ?? '',
             accountCode: r.accountCode ?? '',
             allowCharges: r.allowCharges ?? '',
@@ -153,7 +159,6 @@ export default class BudgetitemsSet extends BaseSessionCommand {
           }
         }
 
-        // Output partial JSON or summary
         // Output partial JSON or summary immediately, then exit
         if (this.jsonEnabled()) {
           const payload = {
@@ -188,7 +193,7 @@ export default class BudgetitemsSet extends BaseSessionCommand {
           const rows = results.map((r) => ({
             portalId: r.portalId ?? '',
             budgetId: r.budgetId ?? '',
-            itemId: r.itemId,
+            itemId: r.itemId ?? '',
             projectName: r.projectName ?? '',
             accountCode: r.accountCode ?? '',
             allowCharges: r.allowCharges ?? '',
@@ -203,117 +208,131 @@ export default class BudgetitemsSet extends BaseSessionCommand {
       } catch {}
     });
 
-    for (const item of items) {
-      if (shouldStop) break;
-      if (!item.itemId) continue;
-
-      // Refresh session every 10 items
-      if (refreshCounter % 10 === 0) {
-        cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
-      }
-
-      const spinner =
-        flags.verbose && !this.jsonEnabled()
-          ? ora(
-              `Setting properties for budget item ${item.itemId}${
-                item.projectName ? ` - ${item.projectName}` : ''
-              }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
-            ).start()
-          : null;
-
-      currentSpinner = spinner;
-
-      try {
-        await eb.setBudgetItemProperties({
-          env,
-          cookies,
-          browser,
-          budgetItem: {
-            budgetItemId: item.itemId,
-            projectId: item.portalId,
-            ...(item.budgetId && { budgetId: item.budgetId }),
-            ...(item.accountCode && { accountCode: item.accountCode }),
-            ...(item.projectName && { projectName: item.projectName }),
-            ...(item.allowCharges !== undefined && {
-              allowCharges: item.allowCharges.toLowerCase() === 'true',
-            }),
-            ...(item.approvalRequiredForChange !== undefined && {
-              approvalRequiredForChange: item.approvalRequiredForChange.toLowerCase() === 'true',
-            }),
-            ...(item.description && { description: item.description }),
-          },
-          dryRun: flags['dry-run'],
-        });
-        if (spinner) {
-          spinner.succeed(
-            `Set properties for budget item ${item.itemId}${
-              item.projectName ? ` - ${item.projectName}` : ''
-            }${item.accountCode ? ` - ${item.accountCode}` : ''}`,
-          );
+    try {
+      for (const item of items) {
+        if (shouldStop) break;
+        if (!item.itemId && !item.accountCode && !item.projectName && !item.portalId) {
+          continue;
         }
 
-        currentSpinner = null;
-        results.push({
-          itemId: item.itemId,
-          status: 'success',
-          ...(item.portalId ? { portalId: item.portalId } : {}),
-          ...(item.budgetId ? { budgetId: item.budgetId } : {}),
-          ...(item.projectName ? { projectName: item.projectName } : {}),
-          ...(item.accountCode ? { accountCode: item.accountCode } : {}),
-          ...(item.allowCharges ? { allowCharges: item.allowCharges } : {}),
-          ...(item.approvalRequiredForChange
-            ? { approvalRequiredForChange: item.approvalRequiredForChange }
-            : {}),
-          ...(item.description ? { description: item.description } : {}),
-        });
-        updatedCount++;
-      } catch (e: any) {
-        if (spinner) {
-          spinner.fail(
-            `Failed to set properties for ${item.itemId}${
-              item.projectName ? ` - ${item.projectName}` : ''
-            }${item.accountCode ? ` - ${item.accountCode}` : ''}: ${e.message}`,
-          );
+        // Refresh session every 10 items
+        if (refreshCounter % 10 === 0) {
+          cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
+          await context.setCookie(...cookies);
         }
 
-        currentSpinner = null;
-        results.push({
-          itemId: item.itemId,
-          status: 'failed',
-          ...(item.portalId ? { portalId: item.portalId } : {}),
-          ...(item.budgetId ? { budgetId: item.budgetId } : {}),
-          ...(item.projectName ? { projectName: item.projectName } : {}),
-          ...(item.accountCode ? { accountCode: item.accountCode } : {}),
-          ...(item.allowCharges ? { allowCharges: item.allowCharges } : {}),
-          ...(item.approvalRequiredForChange
-            ? { approvalRequiredForChange: item.approvalRequiredForChange }
-            : {}),
-          ...(item.description ? { description: item.description } : {}),
-          message: String(e?.message ?? ''),
-        });
-        failedCount++;
-      }
+        const label =
+          [item.projectName, item.accountCode, item.itemId ? `(ID: ${item.itemId})` : '']
+            .filter(Boolean)
+            .join(' - ') ||
+          item.itemId ||
+          'Budget item';
 
+        const spinner =
+          flags.verbose && !this.jsonEnabled()
+            ? ora(`Setting properties for budget item ${label}`).start()
+            : null;
+
+        currentSpinner = spinner;
+
+        try {
+          const { portalId, itemId } = await eb.resolveBudgetItemIdentifiers({
+            page,
+            env,
+            portalId: item.portalId,
+            projectName: item.projectName,
+            itemId: item.itemId,
+            accountCode: item.accountCode,
+          });
+
+          await eb.setBudgetItemProperties({
+            env,
+            cookies,
+            browser,
+            page,
+            budgetItem: {
+              budgetItemId: itemId,
+              projectId: portalId,
+              ...(item.budgetId && { budgetId: item.budgetId }),
+              ...(item.accountCode && { accountCode: item.accountCode }),
+              ...(item.projectName && { projectName: item.projectName }),
+              ...(item.allowCharges !== undefined && {
+                allowCharges: item.allowCharges.toLowerCase() === 'true',
+              }),
+              ...(item.approvalRequiredForChange !== undefined && {
+                approvalRequiredForChange: item.approvalRequiredForChange.toLowerCase() === 'true',
+              }),
+              ...(item.description && { description: item.description }),
+            },
+            dryRun: flags['dry-run'],
+          });
+          if (spinner) {
+            spinner.succeed(`Set properties for budget item ${label}`);
+          }
+
+          currentSpinner = null;
+          results.push({
+            itemId,
+            status: 'success',
+            ...(portalId ? { portalId } : {}),
+            ...(item.budgetId ? { budgetId: item.budgetId } : {}),
+            ...(item.projectName ? { projectName: item.projectName } : {}),
+            ...(item.accountCode ? { accountCode: item.accountCode } : {}),
+            ...(item.allowCharges ? { allowCharges: item.allowCharges } : {}),
+            ...(item.approvalRequiredForChange
+              ? { approvalRequiredForChange: item.approvalRequiredForChange }
+              : {}),
+            ...(item.description ? { description: item.description } : {}),
+          });
+          updatedCount++;
+        } catch (e: any) {
+          const errorMsg = String(e?.message ?? '');
+          if (spinner) {
+            spinner.fail(`Failed to set properties for ${label}: ${errorMsg}`);
+          }
+
+          currentSpinner = null;
+          results.push({
+            itemId: item.itemId ?? '',
+            status: 'failed',
+            ...(item.portalId ? { portalId: item.portalId } : {}),
+            ...(item.budgetId ? { budgetId: item.budgetId } : {}),
+            ...(item.projectName ? { projectName: item.projectName } : {}),
+            ...(item.accountCode ? { accountCode: item.accountCode } : {}),
+            ...(item.allowCharges ? { allowCharges: item.allowCharges } : {}),
+            ...(item.approvalRequiredForChange
+              ? { approvalRequiredForChange: item.approvalRequiredForChange }
+              : {}),
+            ...(item.description ? { description: item.description } : {}),
+            message: errorMsg,
+          });
+          failedCount++;
+        }
+
+        if (progressBar) {
+          progressBar.update(refreshCounter + 1, { success: updatedCount, failed: failedCount });
+        }
+
+        refreshCounter++;
+      }
+    } finally {
       if (progressBar) {
-        progressBar.update(refreshCounter + 1, { success: updatedCount, failed: failedCount });
+        progressBar.stop();
       }
 
-      refreshCounter++;
+      // Close page and browser
+      try {
+        await page.close().catch(() => {});
+      } catch {}
+      await eb.BrowserManager.getInstance().closeBrowser();
     }
-
-    if (progressBar) {
-      progressBar.stop();
-    }
-
-    // Close browser
-    await eb.BrowserManager.getInstance().closeBrowser();
 
     // Optionally write results to CSV
     if (flags['output-csv']) {
       const rows = results.map((r) => ({
         portalId: r.portalId ?? '',
         budgetId: r.budgetId ?? '',
-        itemId: r.itemId,
+        itemId: r.itemId ?? '',
         projectName: r.projectName ?? '',
         accountCode: r.accountCode ?? '',
         allowCharges: r.allowCharges ?? '',

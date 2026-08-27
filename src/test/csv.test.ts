@@ -66,6 +66,42 @@ describe('CSV Header Normalization & Parsing', () => {
       });
     });
 
+    it('parses budgetitems delete with project name and line item without IDs', () => {
+      const csv = `Project,Line Item\nSample Project,01-100-200`;
+      const result = parseCsv<{
+        portalId?: string;
+        itemId?: string;
+        projectName?: string;
+        accountCode?: string;
+      }>(csv, BUDGET_ITEM_DELETE_ALIASES);
+
+      assert.strictEqual(result.errors.length, 0);
+      assert.strictEqual(result.data.length, 1);
+      assert.deepStrictEqual(result.data[0], {
+        projectName: 'Sample Project',
+        accountCode: '01-100-200',
+      });
+    });
+
+    it('parses budgetitems set with project name and line item without IDs', () => {
+      const csv = `Project Name,Line Item,Allow Charges,Description\nSample Project,01-100-200,true,Test Update`;
+      const result = parseCsv<{
+        projectName?: string;
+        accountCode?: string;
+        allowCharges?: string;
+        description?: string;
+      }>(csv, BUDGET_ITEM_SET_ALIASES);
+
+      assert.strictEqual(result.errors.length, 0);
+      assert.strictEqual(result.data.length, 1);
+      assert.deepStrictEqual(result.data[0], {
+        projectName: 'Sample Project',
+        accountCode: '01-100-200',
+        allowCharges: 'true',
+        description: 'Test Update',
+      });
+    });
+
     it('parses budgetitems set with permissive headers', () => {
       const csv = `Project ID,Budget Item ID,Allow Charges,Approval Required For Change,Description\n100,200,true,false,Test Item`;
       const result = parseCsv<{

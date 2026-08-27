@@ -73,7 +73,6 @@ export const BUDGET_ITEM_DELETE_ALIASES: Record<string, string[]> = {
     'project_id',
     'project id',
     'portal',
-    'project',
   ],
   itemId: [
     'itemId',
@@ -88,7 +87,16 @@ export const BUDGET_ITEM_DELETE_ALIASES: Record<string, string[]> = {
     'item',
   ],
   budgetId: ['budgetId', 'budget_id', 'budget id', 'budget'],
-  accountCode: ['accountCode', 'account_code', 'account code', 'account', 'code'],
+  accountCode: [
+    'accountCode',
+    'account_code',
+    'account code',
+    'account',
+    'code',
+    'lineItem',
+    'line_item',
+    'line item',
+  ],
   projectName: [
     'projectName',
     'project_name',
@@ -109,7 +117,6 @@ export const BUDGET_ITEM_SET_ALIASES: Record<string, string[]> = {
     'project_id',
     'project id',
     'portal',
-    'project',
   ],
   itemId: [
     'itemId',
@@ -124,7 +131,16 @@ export const BUDGET_ITEM_SET_ALIASES: Record<string, string[]> = {
     'item',
   ],
   budgetId: ['budgetId', 'budget_id', 'budget id', 'budget'],
-  accountCode: ['accountCode', 'account_code', 'account code', 'account', 'code'],
+  accountCode: [
+    'accountCode',
+    'account_code',
+    'account code',
+    'account',
+    'code',
+    'lineItem',
+    'line_item',
+    'line item',
+  ],
   projectName: [
     'projectName',
     'project_name',
