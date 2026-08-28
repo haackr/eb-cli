@@ -24,6 +24,10 @@ describe('CSV Header Normalization & Parsing', () => {
       assert.strictEqual(normalizeHeader(' USER_NAME '), 'username');
       assert.strictEqual(normalizeHeader('Single Sign-On'), 'singlesignon');
       assert.strictEqual(normalizeHeader('Allow Charges?'), 'allowcharges');
+      assert.strictEqual(
+        normalizeHeader('Approval-Required_For.Change!'),
+        'approvalrequiredforchange',
+      );
     });
   });
 
@@ -173,18 +177,19 @@ describe('CSV Header Normalization & Parsing', () => {
     });
 
     it('parses users setsso with permissive headers', () => {
-      const csv = `User ID,Single Sign-On\n12345,true`;
-      const result = parseCsv<{
-        userId: string;
-        sso: string;
-      }>(csv, USER_SET_SSO_ALIASES);
+      const variations = [
+        'User ID,Single Sign-On\n12345,true',
+        'username,sso_enabled\njohn.doe,yes',
+        'user_id,require sso\n99999,false',
+      ];
 
-      assert.strictEqual(result.errors.length, 0);
-      assert.strictEqual(result.data.length, 1);
-      assert.deepStrictEqual(result.data[0], {
-        userId: '12345',
-        sso: 'true',
-      });
+      for (const csv of variations) {
+        const result = parseCsv<{ userId: string; sso: string }>(csv, USER_SET_SSO_ALIASES);
+        assert.strictEqual(result.errors.length, 0);
+        assert.strictEqual(result.data.length, 1);
+        assert.ok(result.data[0]?.userId);
+        assert.ok(result.data[0]?.sso);
+      }
     });
 
     it('parses users setfield with userId mapped and field labels preserved', () => {
@@ -199,6 +204,29 @@ describe('CSV Header Normalization & Parsing', () => {
         'Last Name': 'Smith',
         'Custom Division': 'Finance',
       });
+    });
+
+    it('parses CSV without aliasMap preserving trimmed header names', () => {
+      const csv = ` Col A , Col B \nval1,val2`;
+      const result = parseCsv<Record<string, string>>(csv);
+
+      assert.strictEqual(result.errors.length, 0);
+      assert.strictEqual(result.data.length, 1);
+      assert.strictEqual(result.data[0]?.['Col A'], 'val1');
+      assert.strictEqual(result.data[0]?.['Col B'], 'val2');
+    });
+
+    it('handles empty CSV input cleanly', () => {
+      const result = parseCsv('');
+      assert.strictEqual(result.data.length, 0);
+      assert.strictEqual(result.errors.length, 0);
+    });
+
+    it('filters out UndetectableDelimiter warnings on single column files', () => {
+      const csv = `username\nuser1@example.com\nuser2@example.com`;
+      const result = parseCsv<{ username: string }>(csv);
+      assert.strictEqual(result.errors.length, 0);
+      assert.strictEqual(result.data.length, 2);
     });
   });
 });

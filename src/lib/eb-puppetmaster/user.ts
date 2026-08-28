@@ -83,7 +83,7 @@ async function clickUserSave(page: puppeteer.Page): Promise<void> {
   ]);
 }
 
-async function setSsoField(page: puppeteer.Page, enabled: boolean): Promise<void> {
+export async function setSsoField(page: puppeteer.Page, enabled: boolean): Promise<void> {
   const setResult = await page.evaluate((value) => {
     const trigger = (el: HTMLElement): void => {
       el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -118,7 +118,7 @@ async function setSsoField(page: puppeteer.Page, enabled: boolean): Promise<void
   }
 }
 
-async function setUserFieldsOnPage(
+export async function setUserFieldsOnPage(
   page: puppeteer.Page,
   fieldValues: UserFieldValueMap,
 ): Promise<{ updatedFields: string[]; notFoundFields: string[] }> {
@@ -419,13 +419,14 @@ async function setUserFieldsOnPage(
 
 export async function deleteUser(options: DeleteUserArgs): Promise<void> {
   const { env, cookies, browser, user, dryRun = false } = options;
-  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   if (!user.userName) {
     throw new Error(
       'Missing userName. CSV must include userName for each row until lookup by email/userName is implemented.',
     );
   }
+
+  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   let page: puppeteer.Page | null = null;
 
@@ -444,6 +445,13 @@ export async function deleteUser(options: DeleteUserArgs): Promise<void> {
 
     await page.goto(url, { waitUntil: 'networkidle0' });
 
+    const currentUrl = page.url().toLowerCase();
+    if (currentUrl.includes('/login') || currentUrl.includes('signin')) {
+      throw new Error(
+        `Session is not active on the manage users page. Requested URL: ${url}. Final URL: ${page.url()}.`,
+      );
+    }
+
     await page.locator(userNameInput).fill(user.userName);
     await page.locator(filterButton).click();
     await page.waitForNavigation({ waitUntil: 'networkidle0' });
@@ -457,7 +465,6 @@ export async function deleteUser(options: DeleteUserArgs): Promise<void> {
       await page.waitForNavigation({ waitUntil: 'networkidle0' });
     } else {
       await page.locator(cancelButton).click();
-      await page.waitForNavigation({ waitUntil: 'networkidle0' });
     }
   } finally {
     if (page) {
@@ -472,11 +479,12 @@ export async function deleteUser(options: DeleteUserArgs): Promise<void> {
 
 export async function setUserSso(options: SetUserSsoArgs): Promise<SetUserSsoResult> {
   const { env, cookies, browser, userId, enabled, dryRun = false } = options;
-  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   if (!userId.trim()) {
     throw new Error('Missing userId. CSV must include userId for each row.');
   }
+
+  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   let page: puppeteer.Page | null = null;
 
@@ -525,7 +533,6 @@ export async function setUserSso(options: SetUserSsoArgs): Promise<SetUserSsoRes
 
 export async function setUserFields(options: SetUserFieldsArgs): Promise<SetUserFieldsResult> {
   const { env, cookies, browser, userId, fieldValues, dryRun = false } = options;
-  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   if (!userId.trim()) {
     throw new Error('Missing userId. CSV must include userId for each row.');
@@ -534,6 +541,8 @@ export async function setUserFields(options: SetUserFieldsArgs): Promise<SetUser
   if (Object.keys(fieldValues).length === 0) {
     throw new Error('No field values provided for user update.');
   }
+
+  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   let page: puppeteer.Page | null = null;
 

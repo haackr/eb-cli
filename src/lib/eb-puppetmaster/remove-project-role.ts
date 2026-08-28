@@ -12,8 +12,8 @@ export type RemoveUserFromProjectRoleArgs = {
   dryRun: boolean;
 };
 
-async function findRemoveButton(
-  userFrame: puppeteer.Frame,
+export async function findRemoveButton(
+  userFrame: puppeteer.Frame | puppeteer.Page,
 ): Promise<puppeteer.ElementHandle | null> {
   const selectors = [
     '#btnRoleRemove',
@@ -42,8 +42,8 @@ async function findRemoveButton(
   return null;
 }
 
-async function selectMatchingUsersOnCurrentPage(
-  userFrame: puppeteer.Frame,
+export async function selectMatchingUsersOnCurrentPage(
+  userFrame: puppeteer.Frame | puppeteer.Page,
   requestedKeys: string[],
 ): Promise<string[]> {
   return await userFrame.evaluate((keys: string[]) => {

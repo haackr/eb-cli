@@ -152,10 +152,10 @@ export async function resolveBudgetItemIdentifiers(
 
 export async function deleteBudgetItem(options: deleteBudgetItemArgs): Promise<void> {
   const { env, cookies, browser, budgetItem, dryRun = false } = options;
-  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
-
   let page: puppeteer.Page | null = options.page ?? null;
   let ownPage = false;
+  const browserInstance =
+    browser || (page ? page.browser() : await BrowserManager.getInstance().getBrowser());
 
   try {
     // Check if browser is still connected
@@ -214,9 +214,10 @@ type SetBudgetItemPropertiesArgs = {
 
 export async function setBudgetItemProperties(options: SetBudgetItemPropertiesArgs): Promise<void> {
   const { env, cookies, browser, budgetItem, dryRun = false } = options;
-  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
   let page: puppeteer.Page | null = options.page ?? null;
   let ownPage = false;
+  const browserInstance =
+    browser || (page ? page.browser() : await BrowserManager.getInstance().getBrowser());
 
   try {
     const context = browserInstance.defaultBrowserContext();

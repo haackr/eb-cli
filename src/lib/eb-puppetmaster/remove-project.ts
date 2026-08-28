@@ -11,6 +11,41 @@ export type RemoveUserFromProjectArgs = {
   dryRun: boolean;
 };
 
+export async function selectUsersInProjectGrid(
+  userFrame: puppeteer.Frame | puppeteer.Page,
+  keys: string[],
+): Promise<string[]> {
+  return await userFrame.evaluate((keys: string[]) => {
+    const requested = new Set(keys);
+    const matched: string[] = [];
+    const rows = Array.from(
+      document.querySelectorAll('#grdResults tr.RowData, #grdResults tr.AltRowData'),
+    );
+
+    for (const row of rows) {
+      const cells = row.querySelectorAll('td');
+      const usernameCell = cells.item(2);
+      if (!usernameCell) continue;
+
+      const key = (usernameCell.textContent ?? '').trim().toLowerCase();
+      if (!requested.has(key)) continue;
+
+      const checkbox = row.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+      if (!checkbox) continue;
+
+      if (!checkbox.checked) {
+        checkbox.click();
+      }
+
+      if (checkbox.checked) {
+        matched.push(key);
+      }
+    }
+
+    return matched;
+  }, keys);
+}
+
 /**
  * Remove one or more users directly from a project's participant list.
  */
@@ -55,35 +90,7 @@ export async function removeUserFromProjectByName(
     }
 
     const matchedKeys = new Set(
-      await userFrame.evaluate((keys: string[]) => {
-        const requested = new Set(keys);
-        const matched: string[] = [];
-        const rows = Array.from(
-          document.querySelectorAll('#grdResults tr.RowData, #grdResults tr.AltRowData'),
-        );
-
-        for (const row of rows) {
-          const cells = row.querySelectorAll('td');
-          const usernameCell = cells.item(2);
-          if (!usernameCell) continue;
-
-          const key = (usernameCell.textContent ?? '').trim().toLowerCase();
-          if (!requested.has(key)) continue;
-
-          const checkbox = row.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
-          if (!checkbox) continue;
-
-          if (!checkbox.checked) {
-            checkbox.click();
-          }
-
-          if (checkbox.checked) {
-            matched.push(key);
-          }
-        }
-
-        return matched;
-      }, Array.from(requestedByKey.keys())),
+      await selectUsersInProjectGrid(userFrame, Array.from(requestedByKey.keys())),
     );
 
     // 5. Click remove once for all selected users (if not dry-run) and accept confirmation.

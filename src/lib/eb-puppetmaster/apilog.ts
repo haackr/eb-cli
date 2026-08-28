@@ -51,7 +51,7 @@ const apiLogsTableSelector =
 const dataRowSelector =
   '#ctl00_ctl00_ContentPlaceHolder1_contentSection_grdResults tr.RowData, #ctl00_ctl00_ContentPlaceHolder1_contentSection_grdResults tr.AltRowData';
 
-function parseDetailsId(onclickValue: string): string {
+export function parseDetailsId(onclickValue: string): string {
   const match = /openLogDetails\('([^']+)'\)/.exec(onclickValue);
   if (!match?.[1]) {
     throw new Error(`Unable to parse details id from onclick: ${onclickValue}`);
@@ -60,7 +60,7 @@ function parseDetailsId(onclickValue: string): string {
   return match[1];
 }
 
-function parseSuccess(input: string): boolean {
+export function parseSuccess(input: string): boolean {
   return input.trim().toLowerCase() === 'true';
 }
 
@@ -68,7 +68,7 @@ function isDetachedFrameError(error: unknown): boolean {
   return error instanceof Error && /detached frame/i.test(error.message);
 }
 
-async function extractSummariesForCurrentPage(
+export async function extractSummariesForCurrentPage(
   page: puppeteer.Page,
   pageNumber: number,
 ): Promise<ApiLogSummary[]> {
@@ -307,11 +307,12 @@ export async function downloadApiLogs(
   options: DownloadApiLogsArgs,
 ): Promise<DownloadApiLogsResult> {
   const { env, cookies, browser, pages, onPageStart, onRecord } = options;
-  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   if (pages < 1) {
     throw new Error('pages must be at least 1');
   }
+
+  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   let page: puppeteer.Page | null = null;
 

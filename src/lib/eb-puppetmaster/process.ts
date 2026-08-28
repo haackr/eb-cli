@@ -18,7 +18,7 @@ export type SetProcessInstanceNullFieldsResult = {
   notFoundFields: string[];
 };
 
-function buildProcessInstanceUrl(
+export function buildProcessInstanceUrl(
   processUrlTemplate: string,
   env: Environment,
   processInstanceId: string,
@@ -26,7 +26,7 @@ function buildProcessInstanceUrl(
   return processUrlTemplate.replaceAll('{env}', env).replaceAll('{id}', processInstanceId);
 }
 
-async function clearFieldsByNames(
+export async function clearFieldsByNames(
   page: puppeteer.Page,
   fieldNames: string[],
 ): Promise<{ clearedFields: string[]; notFoundFields: string[] }> {
@@ -644,7 +644,7 @@ async function clearFieldsByNames(
   }, fieldNames);
 }
 
-async function findFieldsStillPopulated(
+export async function findFieldsStillPopulated(
   page: puppeteer.Page,
   fieldNames: string[],
 ): Promise<string[]> {
@@ -928,7 +928,7 @@ async function waitForProcessFormToSettle(page: puppeteer.Page): Promise<void> {
   await page.waitForNetworkIdle({ idleTime: 500, timeout: 8_000 }).catch(() => null);
 }
 
-async function isAuthenticatedProcessPage(page: puppeteer.Page): Promise<boolean> {
+export async function isAuthenticatedProcessPage(page: puppeteer.Page): Promise<boolean> {
   const currentUrl = page.url().toLowerCase();
   if (
     currentUrl.includes('/login') ||
