@@ -80,4 +80,39 @@ describe('Remove User from Project Role (src/lib/eb-puppetmaster/remove-project-
     const removeBtn = await findRemoveButton(page);
     assert.ok(removeBtn);
   });
+
+  it('efficiently matches against large key arrays (e.g. 10,000 users) without timing out', async () => {
+    const userGridHtml = `
+      <!DOCTYPE html>
+      <html>
+        <body>
+          <table id="grdResults">
+            <tr class="RowData">
+              <td><input type="checkbox" id="u1" data-username="target.user.5000" /></td>
+              <td>Target User 5000</td>
+              <td>target.user.5000@company.com</td>
+            </tr>
+          </table>
+          <button id="btnRoleRemove">Remove</button>
+        </body>
+      </html>
+    `;
+
+    await page.setContent(userGridHtml);
+
+    const largeKeys: string[] = [];
+    for (let i = 0; i < 10_000; i++) {
+      largeKeys.push(`user.${i}@company.com`);
+    }
+    largeKeys.push('target.user.5000@company.com');
+
+    const start = Date.now();
+    const matched = await selectMatchingUsersOnCurrentPage(page, largeKeys);
+    const duration = Date.now() - start;
+
+    assert.strictEqual(matched.length, 1);
+    assert.strictEqual(matched[0], 'target.user.5000@company.com');
+    // Ensure execution is under 2000ms for 10k items
+    assert.ok(duration < 2000, `Expected duration < 2000ms, got ${duration}ms`);
+  });
 });
