@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager } from './index.js';
+import { Environment, baseurl, BrowserManager, optimizePageForAutomation } from './index.js';
 
 export type UserToDelete = {
   userName?: string;
@@ -9,6 +9,7 @@ type DeleteUserArgs = {
   env: Environment;
   cookies: puppeteer.Cookie[];
   browser?: puppeteer.Browser;
+  page?: puppeteer.Page;
   user: UserToDelete;
   dryRun: boolean;
 };
@@ -17,6 +18,7 @@ type SetUserSsoArgs = {
   env: Environment;
   cookies: puppeteer.Cookie[];
   browser?: puppeteer.Browser;
+  page?: puppeteer.Page;
   userId: string;
   enabled: boolean;
   dryRun?: boolean;
@@ -28,6 +30,7 @@ type SetUserFieldsArgs = {
   env: Environment;
   cookies: puppeteer.Cookie[];
   browser?: puppeteer.Browser;
+  page?: puppeteer.Page;
   userId: string;
   fieldValues: UserFieldValueMap;
   dryRun?: boolean;
@@ -70,16 +73,14 @@ const cancelButton = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnNo';
 const userSaveSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnSave1';
 
 async function clickUserSave(page: puppeteer.Page): Promise<void> {
-  const match = await page.$(userSaveSelector);
+  const match = await page.waitForSelector(userSaveSelector, { timeout: 30_000 });
   if (!match) {
     throw new Error(`Save button not found on user edit page: ${userSaveSelector}`);
   }
 
-  await match.click();
-
-  await Promise.race([
-    page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20_000 }).catch(() => null),
-    page.waitForNetworkIdle({ idleTime: 1_000, timeout: 20_000 }).catch(() => null),
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => null),
+    match.click(),
   ]);
 }
 
@@ -428,7 +429,8 @@ export async function deleteUser(options: DeleteUserArgs): Promise<void> {
 
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = null;
+  let page: puppeteer.Page | null = options.page ?? null;
+  let ownPage = false;
 
   try {
     if (!browserInstance.connected) {
@@ -438,36 +440,47 @@ export async function deleteUser(options: DeleteUserArgs): Promise<void> {
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
 
-    page = await context.newPage();
-    await context.setCookie(...cookies);
+    if (!page) {
+      page = await context.newPage();
+      ownPage = true;
+      await optimizePageForAutomation(page);
+    }
 
     const url = `https://${env}.${baseurl}/da2/Setup/Admin/Users/ManageUsers.aspx`;
 
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    const currentUrl = typeof page.url === 'function' ? page.url().toLowerCase() : '';
+    if (!currentUrl.includes('manageusers.aspx')) {
+      await page.goto(url, { waitUntil: 'domcontentloaded' });
+    }
 
-    const currentUrl = page.url().toLowerCase();
-    if (currentUrl.includes('/login') || currentUrl.includes('signin')) {
+    const afterNavUrl = typeof page.url === 'function' ? page.url().toLowerCase() : '';
+    if (afterNavUrl.includes('/login') || afterNavUrl.includes('signin')) {
       throw new Error(
         `Session is not active on the manage users page. Requested URL: ${url}. Final URL: ${page.url()}.`,
       );
     }
 
     await page.locator(userNameInput).fill(user.userName);
-    await page.locator(filterButton).click();
-    await page.waitForNavigation({ waitUntil: 'networkidle0' });
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => null),
+      page.locator(filterButton).click(),
+    ]);
 
     await page.locator(selectFirstCheckbox).click();
-
     await page.locator(deleteButtonSelector).click();
 
     if (!dryRun) {
-      await page.locator(confirmButtonSelector).click();
-      await page.waitForNavigation({ waitUntil: 'networkidle0' });
+      await Promise.all([
+        page
+          .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+          .catch(() => null),
+        page.locator(confirmButtonSelector).click(),
+      ]);
     } else {
       await page.locator(cancelButton).click();
     }
   } finally {
-    if (page) {
+    if (ownPage && page) {
       try {
         await page.close();
       } catch {
@@ -486,7 +499,8 @@ export async function setUserSso(options: SetUserSsoArgs): Promise<SetUserSsoRes
 
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = null;
+  let page: puppeteer.Page | null = options.page ?? null;
+  let ownPage = false;
 
   try {
     if (!browserInstance.connected) {
@@ -496,14 +510,17 @@ export async function setUserSso(options: SetUserSsoArgs): Promise<SetUserSsoRes
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
 
-    page = await context.newPage();
-    await context.setCookie(...cookies);
+    if (!page) {
+      page = await context.newPage();
+      ownPage = true;
+      await optimizePageForAutomation(page);
+    }
 
     const userIdEncoded = encodeURIComponent(userId.trim());
     const url = `https://${env}.${baseurl}/da2/Setup/Admin/Users/AddEditUser.aspx?Mode=Edit&UserID=${userIdEncoded}`;
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-    const currentUrl = page.url().toLowerCase();
+    const currentUrl = typeof page.url === 'function' ? page.url().toLowerCase() : '';
     if (currentUrl.includes('/login') || currentUrl.includes('signin')) {
       throw new Error(
         `Session is not active on the user edit page. Requested URL: ${url}. Final URL: ${page.url()}.`,
@@ -521,7 +538,7 @@ export async function setUserSso(options: SetUserSsoArgs): Promise<SetUserSsoRes
       visitedUrl: page.url(),
     };
   } finally {
-    if (page) {
+    if (ownPage && page) {
       try {
         await page.close();
       } catch {
@@ -544,7 +561,8 @@ export async function setUserFields(options: SetUserFieldsArgs): Promise<SetUser
 
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = null;
+  let page: puppeteer.Page | null = options.page ?? null;
+  let ownPage = false;
 
   try {
     if (!browserInstance.connected) {
@@ -554,14 +572,17 @@ export async function setUserFields(options: SetUserFieldsArgs): Promise<SetUser
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
 
-    page = await context.newPage();
-    await context.setCookie(...cookies);
+    if (!page) {
+      page = await context.newPage();
+      ownPage = true;
+      await optimizePageForAutomation(page);
+    }
 
     const userIdEncoded = encodeURIComponent(userId.trim());
     const url = `https://${env}.${baseurl}/da2/Setup/Admin/Users/AddEditUser.aspx?Mode=Edit&UserID=${userIdEncoded}`;
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-    const currentUrl = page.url().toLowerCase();
+    const currentUrl = typeof page.url === 'function' ? page.url().toLowerCase() : '';
     if (currentUrl.includes('/login') || currentUrl.includes('signin')) {
       throw new Error(
         `Session is not active on the user edit page. Requested URL: ${url}. Final URL: ${page.url()}.`,
@@ -581,7 +602,7 @@ export async function setUserFields(options: SetUserFieldsArgs): Promise<SetUser
       notFoundFields: updateResult.notFoundFields,
     };
   } finally {
-    if (page) {
+    if (ownPage && page) {
       try {
         await page.close();
       } catch {
@@ -595,12 +616,14 @@ type ListManagedUsersArgs = {
   env: Environment;
   cookies: puppeteer.Cookie[];
   browser?: puppeteer.Browser;
+  page?: puppeteer.Page;
 };
 
 type GetUserSsoStatusArgs = {
   env: Environment;
   cookies: puppeteer.Cookie[];
   browser?: puppeteer.Browser;
+  page?: puppeteer.Page;
   userId: string;
   viewUrl?: string;
 };
@@ -608,7 +631,8 @@ type GetUserSsoStatusArgs = {
 export async function listManagedUsers(options: ListManagedUsersArgs): Promise<ManagedUserRow[]> {
   const { env, cookies, browser } = options;
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
-  let page: puppeteer.Page | null = null;
+  let page: puppeteer.Page | null = options.page ?? null;
+  let ownPage = false;
 
   try {
     if (!browserInstance.connected) {
@@ -618,17 +642,20 @@ export async function listManagedUsers(options: ListManagedUsersArgs): Promise<M
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
 
-    page = await context.newPage();
-    await context.setCookie(...cookies);
+    if (!page) {
+      page = await context.newPage();
+      ownPage = true;
+      await optimizePageForAutomation(page);
+    }
 
     const manageUrl = `https://${env}.${baseurl}/da2/Setup/Admin/Users/ManageUsers.aspx`;
-    await page.goto(manageUrl, { waitUntil: 'networkidle0' });
+    await page.goto(manageUrl, { waitUntil: 'domcontentloaded' });
 
     const rowsById = new Map<string, ManagedUserRow>();
 
     for (;;) {
       await page.waitForSelector('#ctl00_ctl00_ContentPlaceHolder1_contentSection_grdResults', {
-        timeout: 20_000,
+        timeout: 30_000,
       });
 
       const pageRows = await page.evaluate(() => {
@@ -683,7 +710,7 @@ export async function listManagedUsers(options: ListManagedUsersArgs): Promise<M
       }
 
       await Promise.all([
-        page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 30_000 }),
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }),
         page.evaluate(() => {
           const pagingRow = document.querySelector('tr.Paging');
           if (!pagingRow) return;
@@ -699,7 +726,7 @@ export async function listManagedUsers(options: ListManagedUsersArgs): Promise<M
 
     return Array.from(rowsById.values());
   } finally {
-    if (page) {
+    if (ownPage && page) {
       try {
         await page.close();
       } catch {
@@ -712,7 +739,8 @@ export async function listManagedUsers(options: ListManagedUsersArgs): Promise<M
 export async function getUserSsoStatus(options: GetUserSsoStatusArgs): Promise<UserSsoStatus> {
   const { env, cookies, browser, userId, viewUrl } = options;
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
-  let page: puppeteer.Page | null = null;
+  let page: puppeteer.Page | null = options.page ?? null;
+  let ownPage = false;
 
   try {
     if (!browserInstance.connected) {
@@ -722,8 +750,11 @@ export async function getUserSsoStatus(options: GetUserSsoStatusArgs): Promise<U
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
 
-    page = await context.newPage();
-    await context.setCookie(...cookies);
+    if (!page) {
+      page = await context.newPage();
+      ownPage = true;
+      await optimizePageForAutomation(page);
+    }
 
     const defaultViewUrl = `https://${env}.${baseurl}/da2/Setup/Admin/Users/ViewUser.aspx?UserID=${encodeURIComponent(
       userId,
@@ -732,9 +763,9 @@ export async function getUserSsoStatus(options: GetUserSsoStatusArgs): Promise<U
       ? new URL(viewUrl, `https://${env}.${baseurl}`).toString()
       : defaultViewUrl;
 
-    await page.goto(resolvedViewUrl, { waitUntil: 'networkidle0' });
+    await page.goto(resolvedViewUrl, { waitUntil: 'domcontentloaded' });
 
-    const currentUrl = page.url().toLowerCase();
+    const currentUrl = typeof page.url === 'function' ? page.url().toLowerCase() : '';
     if (currentUrl.includes('/login') || currentUrl.includes('signin')) {
       throw new Error(
         `Session is not active on the user view page. Requested URL: ${resolvedViewUrl}. Final URL: ${page.url()}.`,
@@ -769,7 +800,7 @@ export async function getUserSsoStatus(options: GetUserSsoStatusArgs): Promise<U
       ssoRequired: /require\s+single\s+sign-?on/i.test(loginAuthentication),
     };
   } finally {
-    if (page) {
+    if (ownPage && page) {
       try {
         await page.close();
       } catch {

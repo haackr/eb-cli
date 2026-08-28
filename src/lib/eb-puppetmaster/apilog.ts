@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { BrowserManager, Environment, baseurl } from './index.js';
+import { BrowserManager, Environment, baseurl, optimizePageForAutomation } from './index.js';
 
 export type ApiLogSummary = {
   page: number;
@@ -277,7 +277,7 @@ async function navigateToPage(page: puppeteer.Page, targetPage: number): Promise
   }, targetPage);
 
   await Promise.race([
-    page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20_000 }),
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }),
     page.waitForFunction(
       (requestedPage) => {
         const currentPage = document.querySelector('tr.Paging span')?.textContent?.trim();
@@ -325,10 +325,11 @@ export async function downloadApiLogs(
     await context.setCookie(...cookies);
 
     page = await context.newPage();
+    await optimizePageForAutomation(page);
     await context.setCookie(...cookies);
 
     const url = `https://${env}.${baseurl}/da2/Setup/Admin/APILogs.aspx`;
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector(apiLogsTableSelector, { timeout: 20_000 });
 
     let recordsDownloaded = 0;

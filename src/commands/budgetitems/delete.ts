@@ -77,6 +77,7 @@ export default class BudgetitemsDelete extends BaseSessionCommand {
     const context = browser.defaultBrowserContext();
     await context.setCookie(...cookies);
     const page = await context.newPage();
+    await eb.optimizePageForAutomation(page, { blockAssets: !flags['show-browser'] });
 
     const results: Array<{
       itemId?: string;

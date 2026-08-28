@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager } from './index.js';
+import { Environment, baseurl, BrowserManager, optimizePageForAutomation } from './index.js';
 import { getPortalIdByProjectName } from './project.js';
 
 export type RemoveUserFromProjectArgs = {
@@ -64,23 +64,25 @@ export async function removeUserFromProjectByName(
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
     page = await context.newPage();
+    await optimizePageForAutomation(page);
 
     // 1. Find the project's PortalID from the project list
     const portalId = await getPortalIdByProjectName(page, env, projectName);
 
     // 2. Navigate to the project participants page
     const projectParticipantsUrl = `https://${env}.${baseurl}/da2/Projects/ProjectParticipants.aspx?PortalID={${portalId}}`;
-    await page.goto(projectParticipantsUrl, { waitUntil: 'networkidle0' });
+    await page.goto(projectParticipantsUrl, { waitUntil: 'domcontentloaded' });
 
     // 3. Get the user list iframe
     const userListFrameEl = await page.waitForSelector(
       'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList',
+      { timeout: 30_000 },
     );
     if (!userListFrameEl) throw new Error('User list iframe not found');
     const userFrame = await userListFrameEl.contentFrame();
     if (!userFrame) throw new Error('Could not access user list iframe content');
 
-    await userFrame.waitForSelector('#grdResults');
+    await userFrame.waitForSelector('#grdResults', { timeout: 30_000 });
 
     // 4. Select checkboxes for matching users from the current (non-paginated) grid.
     const requestedByKey = new Map<string, string>();
@@ -95,12 +97,11 @@ export async function removeUserFromProjectByName(
 
     // 5. Click remove once for all selected users (if not dry-run) and accept confirmation.
     if (!dryRun && matchedKeys.size > 0) {
-      const removeBtn = await userFrame.waitForSelector('#btnRemove');
+      const removeBtn = await userFrame.waitForSelector('#btnRemove', { timeout: 30_000 });
       if (!removeBtn) throw new Error('Remove from Project button not found');
       page.once('dialog', (dialog) => dialog.accept());
       await removeBtn.click();
-      await page.waitForNetworkIdle();
-      await userFrame.waitForSelector('#grdResults');
+      await userFrame.waitForSelector('#grdResults', { timeout: 30_000 }).catch(() => null);
     }
 
     const notFound: string[] = [];

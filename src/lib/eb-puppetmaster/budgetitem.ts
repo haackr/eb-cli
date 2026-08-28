@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager } from './index.js';
+import { Environment, baseurl, BrowserManager, optimizePageForAutomation } from './index.js';
 import { getPortalIdByProjectName } from './project.js';
 
 export type BudgetItem = {
@@ -169,6 +169,7 @@ export async function deleteBudgetItem(options: deleteBudgetItemArgs): Promise<v
     if (!page) {
       page = await browserInstance.newPage();
       ownPage = true;
+      await optimizePageForAutomation(page);
     }
 
     // Navigate to the budget item page
@@ -176,18 +177,27 @@ export async function deleteBudgetItem(options: deleteBudgetItemArgs): Promise<v
     const url = `https://${env}.${baseurl}/da2/Cost/Budgets/LineItemDetails.aspx?Mode=Edit&PortalID={${cleanPortalId}}&BudgetLineItemId=${
       budgetItem.budgetItemId
     }${budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ''}`;
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-    const deleteButton = await page.$(deleteButtonSelector);
+    const deleteButton = await page.waitForSelector(deleteButtonSelector, { timeout: 30_000 });
     if (deleteButton) {
-      await deleteButton.click();
-      await page.waitForNavigation();
+      if (typeof deleteButton.click === 'function') {
+        await Promise.all([
+          page
+            .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+            .catch(() => null),
+          deleteButton.click(),
+        ]);
+      }
       // Wait for confirmation dialog and confirm
-      const confirmButton = await page.waitForSelector(confirmButtonSelector);
-      if (confirmButton && !dryRun) {
-        await confirmButton.click();
-        // Wait for deletion to complete
-        await page.waitForNavigation({ waitUntil: 'networkidle0' });
+      const confirmButton = await page.waitForSelector(confirmButtonSelector, { timeout: 30_000 });
+      if (confirmButton && !dryRun && typeof confirmButton.click === 'function') {
+        await Promise.all([
+          page
+            .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+            .catch(() => null),
+          confirmButton.click(),
+        ]);
       }
     } else {
       throw new Error('Delete button not found');
@@ -225,18 +235,21 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
     if (!page) {
       page = await context.newPage();
       ownPage = true;
+      await optimizePageForAutomation(page);
     }
     const cleanPortalId = budgetItem.projectId.replace(/[{}]/g, '').trim();
     const url = `https://${env}.${baseurl}/da2/Cost/Budgets/LineItemDetails.aspx?Mode=Edit&PortalId={${cleanPortalId}}&BudgetLineItemId=${
       budgetItem.budgetItemId
     }${budgetItem.budgetId ? `&BudgetId=${budgetItem.budgetId}` : ''}`;
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
 
-    const editButton = await page.waitForSelector(editButtonSelector);
+    const editButton = await page.waitForSelector(editButtonSelector, { timeout: 30_000 });
     await editButton?.click();
     // Set properties
     if (budgetItem.allowCharges !== undefined) {
-      const allowChargesCheckbox = await page.waitForSelector(allowChargesSelector);
+      const allowChargesCheckbox = await page.waitForSelector(allowChargesSelector, {
+        timeout: 30_000,
+      });
       if (!allowChargesCheckbox) throw new Error('Allow Charges checkbox not found');
       const allowChargesChecked = await (
         await allowChargesCheckbox?.getProperty('checked')
@@ -247,7 +260,9 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
     }
 
     if (budgetItem.approvalRequiredForChange !== undefined) {
-      const approvalCheckbox = await page.waitForSelector(approvalRequiredForChangeSelector);
+      const approvalCheckbox = await page.waitForSelector(approvalRequiredForChangeSelector, {
+        timeout: 30_000,
+      });
       if (!approvalCheckbox) throw new Error('Approval Required for Change checkbox not found');
       const approvalChecked = await (await approvalCheckbox?.getProperty('checked')).jsonValue();
       if (approvalChecked !== budgetItem.approvalRequiredForChange) {
@@ -256,7 +271,7 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
     }
 
     if (budgetItem.description) {
-      const descriptionInput = await page.waitForSelector(descriptionSelector);
+      const descriptionInput = await page.waitForSelector(descriptionSelector, { timeout: 30_000 });
       if (!descriptionInput) throw new Error('Description input not found');
       await page.$eval(
         descriptionSelector,
@@ -271,8 +286,12 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
     if (!dryRun) {
       const saveButton = await page.$(saveButtonSelector);
       if (!saveButton) throw new Error('Save button not found');
-      await saveButton.click();
-      await page.waitForNavigation({ waitUntil: 'networkidle0' });
+      await Promise.all([
+        page
+          .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 })
+          .catch(() => null),
+        saveButton.click(),
+      ]);
     }
   } finally {
     if (ownPage && page) {

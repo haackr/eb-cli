@@ -231,3 +231,49 @@ export class BrowserManager {
     }
   }
 }
+
+/**
+ * Configures a Puppeteer page for maximum performance during automated runs.
+ * Intercepts and blocks non-critical resources (images, fonts, stylesheets, trackers)
+ * and configures generous operation timeouts.
+ */
+export async function optimizePageForAutomation(
+  page: puppeteer.Page,
+  options: { blockAssets?: boolean } = { blockAssets: true },
+): Promise<void> {
+  if (!page) return;
+  if (typeof page.setDefaultNavigationTimeout === 'function') {
+    page.setDefaultNavigationTimeout(90_000);
+  }
+  if (typeof page.setDefaultTimeout === 'function') {
+    page.setDefaultTimeout(90_000);
+  }
+
+  if (options.blockAssets && typeof page.setRequestInterception === 'function') {
+    try {
+      await page.setRequestInterception(true);
+      page.on('request', (req) => {
+        const resourceType = typeof req.resourceType === 'function' ? req.resourceType() : '';
+        const url = (typeof req.url === 'function' ? req.url() : '').toLowerCase();
+        if (
+          ['image', 'stylesheet', 'font', 'media'].includes(resourceType) ||
+          url.includes('google-analytics') ||
+          url.includes('googletagmanager') ||
+          url.includes('pendo.io') ||
+          url.includes('walkme') ||
+          url.includes('doubleclick')
+        ) {
+          if (typeof req.abort === 'function') {
+            req.abort().catch(() => {});
+          }
+        } else {
+          if (typeof req.continue === 'function') {
+            req.continue().catch(() => {});
+          }
+        }
+      });
+    } catch {
+      // Ignore if request interception is already active or in mock context
+    }
+  }
+}

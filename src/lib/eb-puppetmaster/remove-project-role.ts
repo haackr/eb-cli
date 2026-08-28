@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager } from './index.js';
+import { Environment, baseurl, BrowserManager, optimizePageForAutomation } from './index.js';
 import { getPortalIdByProjectName } from './project.js';
 
 export type RemoveUserFromProjectRoleArgs = {
@@ -215,6 +215,7 @@ export async function removeUserFromProjectRoleByName(
     }
     await context.setCookie(...currentCookies);
     const newP = await context.newPage();
+    await optimizePageForAutomation(newP);
     newP.setDefaultNavigationTimeout(90_000);
     newP.setDefaultTimeout(90_000);
 

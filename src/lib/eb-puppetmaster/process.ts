@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { baseurl, BrowserManager, Environment } from './index.js';
+import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';
 
 type SetProcessInstanceNullFieldsArgs = {
   env: Environment;
@@ -834,7 +834,7 @@ async function clickSave(page: puppeteer.Page): Promise<void> {
 
     saveFound = true;
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 30_000 }).catch(() => null),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => null),
       match.click(),
     ]);
     break;
@@ -866,7 +866,7 @@ async function clickSave(page: puppeteer.Page): Promise<void> {
 
     saveFound = true;
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 30_000 }).catch(() => null),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => null),
       saveElement.click(),
     ]);
   }
@@ -984,6 +984,7 @@ export async function setProcessInstanceFieldsToNull(
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
     page = await context.newPage();
+    await optimizePageForAutomation(page);
 
     page.on('dialog', async (dialog) => {
       try {
@@ -991,7 +992,7 @@ export async function setProcessInstanceFieldsToNull(
       } catch {}
     });
 
-    await page.goto(requestedUrl, { waitUntil: 'networkidle0' });
+    await page.goto(requestedUrl, { waitUntil: 'domcontentloaded' });
     visitedUrl = page.url();
 
     if (!(await isAuthenticatedProcessPage(page))) {
