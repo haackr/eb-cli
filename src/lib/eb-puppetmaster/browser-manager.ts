@@ -256,7 +256,7 @@ export async function optimizePageForAutomation(
         const resourceType = typeof req.resourceType === 'function' ? req.resourceType() : '';
         const url = (typeof req.url === 'function' ? req.url() : '').toLowerCase();
         if (
-          ['image', 'stylesheet', 'font', 'media'].includes(resourceType) ||
+          ['image', 'media'].includes(resourceType) ||
           url.includes('google-analytics') ||
           url.includes('googletagmanager') ||
           url.includes('pendo.io') ||

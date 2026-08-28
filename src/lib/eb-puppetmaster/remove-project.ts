@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager, optimizePageForAutomation } from './index.js';
+import { Environment, baseurl, BrowserManager } from './index.js';
 import { getPortalIdByProjectName } from './project.js';
 
 export type RemoveUserFromProjectArgs = {
@@ -64,7 +64,6 @@ export async function removeUserFromProjectByName(
     const context = browserInstance.defaultBrowserContext();
     await context.setCookie(...cookies);
     page = await context.newPage();
-    await optimizePageForAutomation(page);
 
     // 1. Find the project's PortalID from the project list
     const portalId = await getPortalIdByProjectName(page, env, projectName);
