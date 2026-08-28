@@ -70,18 +70,17 @@ export async function removeUserFromProjectByName(
 
     // 2. Navigate to the project participants page
     const projectParticipantsUrl = `https://${env}.${baseurl}/da2/Projects/ProjectParticipants.aspx?PortalID={${portalId}}`;
-    await page.goto(projectParticipantsUrl, { waitUntil: 'domcontentloaded' });
+    await page.goto(projectParticipantsUrl, { waitUntil: 'networkidle0' });
 
     // 3. Get the user list iframe
     const userListFrameEl = await page.waitForSelector(
       'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList',
-      { timeout: 30_000 },
     );
     if (!userListFrameEl) throw new Error('User list iframe not found');
     const userFrame = await userListFrameEl.contentFrame();
     if (!userFrame) throw new Error('Could not access user list iframe content');
 
-    await userFrame.waitForSelector('#grdResults', { timeout: 30_000 });
+    await userFrame.waitForSelector('#grdResults');
 
     // 4. Select checkboxes for matching users from the current (non-paginated) grid.
     const requestedByKey = new Map<string, string>();
@@ -96,11 +95,12 @@ export async function removeUserFromProjectByName(
 
     // 5. Click remove once for all selected users (if not dry-run) and accept confirmation.
     if (!dryRun && matchedKeys.size > 0) {
-      const removeBtn = await userFrame.waitForSelector('#btnRemove', { timeout: 30_000 });
+      const removeBtn = await userFrame.waitForSelector('#btnRemove');
       if (!removeBtn) throw new Error('Remove from Project button not found');
       page.once('dialog', (dialog) => dialog.accept());
       await removeBtn.click();
-      await userFrame.waitForSelector('#grdResults', { timeout: 30_000 }).catch(() => null);
+      await page.waitForNetworkIdle();
+      await userFrame.waitForSelector('#grdResults');
     }
 
     const notFound: string[] = [];
