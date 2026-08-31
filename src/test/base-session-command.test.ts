@@ -115,8 +115,9 @@ describe('BaseSessionCommand (src/lib/base-session-command.ts)', () => {
       db.addSession('user@example.com', 'us1', 'Acct', JSON.stringify(originalCookies));
 
       const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
+        isConnected: () => true,
+        contexts: () => [],
+        newContext: async () => ({
           newPage: async () => ({
             setDefaultNavigationTimeout: () => {},
             setDefaultTimeout: () => {},
@@ -126,7 +127,7 @@ describe('BaseSessionCommand (src/lib/base-session-command.ts)', () => {
               throw new Error('Not found');
             },
           }),
-          setCookie: async () => {},
+          addCookies: async () => {},
           cookies: async () => originalCookies,
           close: async () => {},
         }),
@@ -145,8 +146,9 @@ describe('BaseSessionCommand (src/lib/base-session-command.ts)', () => {
       db.addSession('expired@example.com', 'us1', 'Acct', '[]');
 
       const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
+        isConnected: () => true,
+        contexts: () => [],
+        newContext: async () => ({
           newPage: async () => ({
             setDefaultNavigationTimeout: () => {},
             setDefaultTimeout: () => {},
@@ -155,7 +157,7 @@ describe('BaseSessionCommand (src/lib/base-session-command.ts)', () => {
               throw new Error('Timeout');
             },
           }),
-          setCookie: async () => {},
+          addCookies: async () => {},
           cookies: async () => [],
           close: async () => {},
         }),

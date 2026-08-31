@@ -1,6 +1,6 @@
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import puppeteer from 'puppeteer';
+import { chromium, type Browser, type Page } from 'playwright';
 import {
   selectMatchingUsersOnCurrentPage,
   findRemoveButton,
@@ -8,11 +8,11 @@ import {
 } from '../../lib/eb-puppetmaster/index.js';
 
 describe('Remove User from Project Role (src/lib/eb-puppetmaster/remove-project-role.ts)', () => {
-  let browser: puppeteer.Browser;
-  let page: puppeteer.Page;
+  let browser: Browser;
+  let page: Page;
 
   before(async () => {
-    browser = await puppeteer.launch({
+    browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });

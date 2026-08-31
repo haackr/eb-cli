@@ -1,6 +1,6 @@
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import puppeteer from 'puppeteer';
+import { chromium, type Browser, type Page } from 'playwright';
 import {
   setUserFieldsOnPage,
   setSsoField,
@@ -12,11 +12,11 @@ import {
 } from '../../lib/eb-puppetmaster/index.js';
 
 describe('User Operations (src/lib/eb-puppetmaster/user.ts)', () => {
-  let browser: puppeteer.Browser;
-  let page: puppeteer.Page;
+  let browser: Browser;
+  let page: Page;
 
   before(async () => {
-    browser = await puppeteer.launch({
+    browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
@@ -187,9 +187,18 @@ describe('User Operations (src/lib/eb-puppetmaster/user.ts)', () => {
       await page.setContent(mockHtml);
 
       const mockBrowser: any = {
-        connected: true,
-        defaultBrowserContext: () => ({
-          setCookie: async () => {},
+        isConnected: () => true,
+        contexts: () => [
+          {
+            addCookies: async () => {},
+            newPage: async () => {
+              page.goto = async () => null as any;
+              return page;
+            },
+          },
+        ],
+        newContext: async () => ({
+          addCookies: async () => {},
           newPage: async () => {
             page.goto = async () => null as any;
             return page;
@@ -238,9 +247,18 @@ describe('User Operations (src/lib/eb-puppetmaster/user.ts)', () => {
       await page.setContent(mockHtml);
 
       const mockBrowser: any = {
-        connected: true,
-        defaultBrowserContext: () => ({
-          setCookie: async () => {},
+        isConnected: () => true,
+        contexts: () => [
+          {
+            addCookies: async () => {},
+            newPage: async () => {
+              page.goto = async () => null as any;
+              return page;
+            },
+          },
+        ],
+        newContext: async () => ({
+          addCookies: async () => {},
           newPage: async () => {
             page.goto = async () => null as any;
             return page;

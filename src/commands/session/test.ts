@@ -1,7 +1,7 @@
 import { Command, Flags } from '@oclif/core';
-import type { Cookie } from 'puppeteer';
 import ora from 'ora';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
+import type { Cookie } from '../../lib/eb-puppetmaster/index.js';
 import * as db from '../../lib/db.js';
 import type { SessionRow } from '../../lib/db.js';
 

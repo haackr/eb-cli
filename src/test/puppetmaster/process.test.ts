@@ -1,6 +1,6 @@
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import puppeteer from 'puppeteer';
+import { chromium, type Browser, type Page } from 'playwright';
 import {
   buildProcessInstanceUrl,
   clearFieldsByNames,
@@ -12,11 +12,11 @@ import {
 } from '../../lib/eb-puppetmaster/index.js';
 
 describe('Process Operations (src/lib/eb-puppetmaster/process.ts)', () => {
-  let browser: puppeteer.Browser;
-  let page: puppeteer.Page;
+  let browser: Browser;
+  let page: Page;
 
   before(async () => {
-    browser = await puppeteer.launch({
+    browser = await chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });

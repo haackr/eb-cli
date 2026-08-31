@@ -80,19 +80,22 @@ describe('Session Commands (src/commands/session/)', () => {
         JSON.stringify([{ name: 'c1', value: 'v1' }]),
       );
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => ({}),
-          }),
-          setCookie: async () => {},
-          cookies: async () => [{ name: 'c1', value: 'refreshed_v2' }],
-          close: async () => {},
+      const mockContext = {
+        addCookies: async () => {},
+        cookies: async () => [{ name: 'c1', value: 'refreshed_v2' }],
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForSelector: async () => ({}),
         }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
@@ -109,21 +112,24 @@ describe('Session Commands (src/commands/session/)', () => {
     it('deletes invalid sessions from the database', async () => {
       db.addSession('invalid@example.com', 'us1', 'Acct1', '[]');
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => {
-              throw new Error('Not logged in');
-            },
-          }),
-          setCookie: async () => {},
-          cookies: async () => [],
-          close: async () => {},
+      const mockContext = {
+        addCookies: async () => {},
+        cookies: async () => [],
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForSelector: async () => {
+            throw new Error('Not logged in');
+          },
         }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
@@ -139,17 +145,20 @@ describe('Session Commands (src/commands/session/)', () => {
     it('logs out a specific session by --session-id', async () => {
       db.addSession('user@example.com', 'us1', 'Acct', '[]');
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-          }),
-          setCookie: async () => {},
-          close: async () => {},
+      const mockContext = {
+        addCookies: async () => {},
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
         }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
@@ -164,17 +173,20 @@ describe('Session Commands (src/commands/session/)', () => {
       db.addSession('u1@example.com', 'us1', 'A1', '[]');
       db.addSession('u2@example.com', 'us2', 'A2', '[]');
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-          }),
-          setCookie: async () => {},
-          close: async () => {},
+      const mockContext = {
+        addCookies: async () => {},
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
         }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;

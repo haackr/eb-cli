@@ -1,5 +1,12 @@
-import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager, optimizePageForAutomation } from './index.js';
+import { type Browser, type Page } from 'playwright';
+import {
+  Environment,
+  baseurl,
+  BrowserManager,
+  optimizePageForAutomation,
+  normalizeCookies,
+  type Cookie,
+} from './index.js';
 import { getPortalIdByProjectName } from './project.js';
 
 export type BudgetItem = {
@@ -15,9 +22,9 @@ export type BudgetItem = {
 
 type deleteBudgetItemArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser | undefined;
-  page?: puppeteer.Page | undefined;
+  cookies: Cookie[];
+  browser?: Browser | undefined;
+  page?: Page | undefined;
   budgetItem: BudgetItem;
   dryRun: boolean;
 };
@@ -52,7 +59,7 @@ export function clearBudgetItemCache(): void {
  * and extracts all account codes and their corresponding budget item IDs.
  */
 export async function fetchProjectBudgetItems(
-  page: puppeteer.Page,
+  page: Page,
   env: Environment,
   portalId: string,
 ): Promise<Map<string, string>> {
@@ -69,7 +76,7 @@ export async function fetchProjectBudgetItems(
   // Ensure hide zero values is unchecked so zero value lines are visible
   const hideZeroCheckbox = await page.$(hideZeroValuesCheckboxSelector);
   if (hideZeroCheckbox) {
-    const isChecked = await (await hideZeroCheckbox.getProperty('checked')).jsonValue();
+    const isChecked = await hideZeroCheckbox.evaluate((el) => (el as HTMLInputElement).checked);
     if (isChecked) {
       await Promise.all([
         page.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => null),
@@ -105,7 +112,7 @@ export async function fetchProjectBudgetItems(
 }
 
 export type ResolveBudgetItemArgs = {
-  page: puppeteer.Page;
+  page: Page;
   env: Environment;
   portalId?: string | undefined;
   projectName?: string | undefined;
@@ -152,22 +159,27 @@ export async function resolveBudgetItemIdentifiers(
 
 export async function deleteBudgetItem(options: deleteBudgetItemArgs): Promise<void> {
   const { env, cookies, browser, budgetItem, dryRun = false } = options;
-  let page: puppeteer.Page | null = options.page ?? null;
+  let page: Page | null = options.page ?? null;
   let ownPage = false;
   const browserInstance =
-    browser || (page ? page.browser() : await BrowserManager.getInstance().getBrowser());
+    browser ||
+    (page
+      ? (page.context().browser() ?? (await BrowserManager.getInstance().getBrowser()))
+      : await BrowserManager.getInstance().getBrowser());
 
   try {
     // Check if browser is still connected
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
 
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
 
     if (!page) {
-      page = await browserInstance.newPage();
+      page = await context.newPage();
       ownPage = true;
       await optimizePageForAutomation(page);
     }
@@ -215,23 +227,28 @@ export async function deleteBudgetItem(options: deleteBudgetItemArgs): Promise<v
 
 type SetBudgetItemPropertiesArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser | undefined;
-  page?: puppeteer.Page | undefined;
+  cookies: Cookie[];
+  browser?: Browser | undefined;
+  page?: Page | undefined;
   budgetItem: BudgetItem;
   dryRun?: boolean | undefined;
 };
 
 export async function setBudgetItemProperties(options: SetBudgetItemPropertiesArgs): Promise<void> {
   const { env, cookies, browser, budgetItem, dryRun = false } = options;
-  let page: puppeteer.Page | null = options.page ?? null;
+  let page: Page | null = options.page ?? null;
   let ownPage = false;
   const browserInstance =
-    browser || (page ? page.browser() : await BrowserManager.getInstance().getBrowser());
+    browser ||
+    (page
+      ? (page.context().browser() ?? (await BrowserManager.getInstance().getBrowser()))
+      : await BrowserManager.getInstance().getBrowser());
 
   try {
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
     if (!page) {
       page = await context.newPage();
       ownPage = true;
@@ -251,9 +268,9 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
         timeout: 30_000,
       });
       if (!allowChargesCheckbox) throw new Error('Allow Charges checkbox not found');
-      const allowChargesChecked = await (
-        await allowChargesCheckbox?.getProperty('checked')
-      ).jsonValue();
+      const allowChargesChecked = await allowChargesCheckbox.evaluate(
+        (el) => (el as HTMLInputElement).checked,
+      );
       if (allowChargesChecked !== budgetItem.allowCharges) {
         await allowChargesCheckbox.click();
       }
@@ -264,7 +281,9 @@ export async function setBudgetItemProperties(options: SetBudgetItemPropertiesAr
         timeout: 30_000,
       });
       if (!approvalCheckbox) throw new Error('Approval Required for Change checkbox not found');
-      const approvalChecked = await (await approvalCheckbox?.getProperty('checked')).jsonValue();
+      const approvalChecked = await approvalCheckbox.evaluate(
+        (el) => (el as HTMLInputElement).checked,
+      );
       if (approvalChecked !== budgetItem.approvalRequiredForChange) {
         await approvalCheckbox.click();
       }

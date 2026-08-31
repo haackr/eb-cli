@@ -53,41 +53,35 @@ describe('Process Command (src/commands/process/setnullfield.ts)', () => {
     const csvPath = path.join(tmpDir, 'process_fields.csv');
     fs.writeFileSync(csvPath, 'Instance ID,Field 1,Field 2\nPROC-101,Description,Notes\n', 'utf8');
 
-    const mockBrowser: any = {
-      connected: true,
-      createBrowserContext: async () => ({
-        newPage: async () => ({
-          setDefaultNavigationTimeout: () => {},
-          setDefaultTimeout: () => {},
-          goto: async () => {},
-          waitForSelector: async () => ({}),
+    const mockContext = {
+      addCookies: async () => {},
+      cookies: async () => [{ name: 'sid', value: '1' }],
+      close: async () => {},
+      newPage: async () => ({
+        setDefaultNavigationTimeout: () => {},
+        setDefaultTimeout: () => {},
+        goto: async () => {},
+        url: () => 'https://app.e-builder.net/instancedetails.aspx?instanceid=PROC-101',
+        on: () => {},
+        evaluate: async () => ({
+          hasDataFieldsSection: true,
+          hasDataFieldRows: true,
+          hasProcessTitle: true,
+          clearedFields: ['Description', 'Notes'],
+          notFoundFields: [],
         }),
-        setCookie: async () => {},
-        cookies: async () => [{ name: 'sid', value: '1' }],
+        waitForSelector: async () => ({}),
+        waitForFunction: async () => ({}),
+        waitForLoadState: async () => ({}),
+        $: async () => ({ click: async () => {} }),
         close: async () => {},
       }),
-      defaultBrowserContext: () => ({
-        setCookie: async () => {},
-        newPage: async () => ({
-          setDefaultNavigationTimeout: () => {},
-          setDefaultTimeout: () => {},
-          goto: async () => {},
-          url: () => 'https://app.e-builder.net/instancedetails.aspx?instanceid=PROC-101',
-          on: () => {},
-          evaluate: async () => ({
-            hasDataFieldsSection: true,
-            hasDataFieldRows: true,
-            hasProcessTitle: true,
-            clearedFields: ['Description', 'Notes'],
-            notFoundFields: [],
-          }),
-          waitForSelector: async () => ({}),
-          waitForFunction: async () => ({}),
-          waitForNetworkIdle: async () => ({}),
-          $: async () => ({ click: async () => {} }),
-          close: async () => {},
-        }),
-      }),
+    };
+
+    const mockBrowser: any = {
+      isConnected: () => true,
+      contexts: () => [mockContext],
+      newContext: async () => mockContext,
     };
 
     eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;

@@ -55,31 +55,26 @@ describe('API Logs Command (src/commands/apilogs/download.ts)', () => {
   it('downloads logs and writes jsonl output in --json mode', async () => {
     const outputFile = path.join(tmpDir, 'downloaded.jsonl');
 
-    const mockBrowser: any = {
-      connected: true,
-      createBrowserContext: async () => ({
-        newPage: async () => ({
-          setDefaultNavigationTimeout: () => {},
-          setDefaultTimeout: () => {},
-          goto: async () => {},
-          waitForSelector: async () => ({}),
-        }),
-        setCookie: async () => {},
-        cookies: async () => [{ name: 'sid', value: '1' }],
+    const mockContext = {
+      addCookies: async () => {},
+      cookies: async () => [{ name: 'sid', value: '1' }],
+      close: async () => {},
+      newPage: async () => ({
+        setDefaultNavigationTimeout: () => {},
+        setDefaultTimeout: () => {},
+        goto: async () => {},
+        waitForSelector: async () => ({}),
+        $$eval: async () => [],
+        $: async () => null,
+        evaluate: async () => [],
         close: async () => {},
       }),
-      defaultBrowserContext: () => ({
-        setCookie: async () => {},
-        newPage: async () => ({
-          setDefaultNavigationTimeout: () => {},
-          setDefaultTimeout: () => {},
-          goto: async () => {},
-          waitForSelector: async () => ({}),
-          $$eval: async () => [],
-          $: async () => null,
-          close: async () => {},
-        }),
-      }),
+    };
+
+    const mockBrowser: any = {
+      isConnected: () => true,
+      contexts: () => [mockContext],
+      newContext: async () => mockContext,
     };
 
     eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;

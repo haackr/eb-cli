@@ -80,8 +80,10 @@ export default class UsersDelete extends BaseSessionCommand {
       !flags['show-browser'],
       !flags['show-browser'] ? ['--window-size=1200,800'] : undefined,
     );
-    const context = browser.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await eb.BrowserManager.getInstance().getDefaultContext(browser)) ||
+      (await browser.newContext());
+    await context.addCookies(eb.normalizeCookies(cookies));
     const page = await context.newPage();
     await eb.optimizePageForAutomation(page, { blockAssets: !flags['show-browser'] });
 
@@ -185,7 +187,7 @@ export default class UsersDelete extends BaseSessionCommand {
 
         if (refreshCounter % 10 === 0) {
           cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
-          await context.setCookie(...cookies);
+          await context.addCookies(eb.normalizeCookies(cookies));
         }
 
         const displayId = user.userName || 'unknown-user';

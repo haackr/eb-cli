@@ -1,10 +1,17 @@
-import puppeteer from 'puppeteer';
-import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';
+import { type Browser, type Page } from 'playwright';
+import {
+  baseurl,
+  BrowserManager,
+  Environment,
+  optimizePageForAutomation,
+  normalizeCookies,
+  type Cookie,
+} from './index.js';
 
 type SetProcessInstanceNullFieldsArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
+  cookies: Cookie[];
+  browser?: Browser;
   processInstanceId: string;
   fieldNames: string[];
   dryRun?: boolean;
@@ -27,7 +34,7 @@ export function buildProcessInstanceUrl(
 }
 
 export async function clearFieldsByNames(
-  page: puppeteer.Page,
+  page: Page,
   fieldNames: string[],
 ): Promise<{ clearedFields: string[]; notFoundFields: string[] }> {
   return await page.evaluate((names) => {
@@ -645,7 +652,7 @@ export async function clearFieldsByNames(
 }
 
 export async function findFieldsStillPopulated(
-  page: puppeteer.Page,
+  page: Page,
   fieldNames: string[],
 ): Promise<string[]> {
   return await page.evaluate((names) => {
@@ -817,7 +824,7 @@ export async function findFieldsStillPopulated(
   }, fieldNames);
 }
 
-async function clickSave(page: puppeteer.Page): Promise<void> {
+async function clickSave(page: Page): Promise<void> {
   await waitForProcessFormToSettle(page);
 
   const exactSaveSelectors = [
@@ -841,40 +848,40 @@ async function clickSave(page: puppeteer.Page): Promise<void> {
   }
 
   if (!saveFound) {
-    const saveHandle = await page.evaluateHandle(() => {
+    const saveClicked = await page.evaluate(() => {
       const controls = Array.from(
         document.querySelectorAll('button, input[type="button"], input[type="submit"]'),
       );
-      return (
-        controls.find((el) => {
-          const id = (el.getAttribute('id') ?? '').toLowerCase();
-          const name = (el.getAttribute('name') ?? '').toLowerCase();
-          const text = ((el.textContent ?? '') || (el.getAttribute('value') ?? ''))
-            .trim()
-            .toLowerCase();
-          return (
-            id.includes('save') || name.includes('save') || text === 'save' || text.includes('save')
-          );
-        }) ?? null
-      );
+      const el = controls.find((el) => {
+        const id = (el.getAttribute('id') ?? '').toLowerCase();
+        const name = (el.getAttribute('name') ?? '').toLowerCase();
+        const text = ((el.textContent ?? '') || (el.getAttribute('value') ?? ''))
+          .trim()
+          .toLowerCase();
+        return (
+          id.includes('save') || name.includes('save') || text === 'save' || text.includes('save')
+        );
+      }) as HTMLElement | undefined;
+
+      if (el) {
+        el.click();
+        return true;
+      }
+      return false;
     });
 
-    const saveElement = saveHandle.asElement() as puppeteer.ElementHandle<HTMLElement> | null;
-    if (!saveElement) {
+    if (!saveClicked) {
       throw new Error('Save button not found on process instance form.');
     }
 
     saveFound = true;
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => null),
-      saveElement.click(),
-    ]);
+    await page.waitForLoadState('domcontentloaded').catch(() => null);
   }
 
   await waitForProcessFormToSettle(page);
 }
 
-async function waitForProcessFormToSettle(page: puppeteer.Page): Promise<void> {
+async function waitForProcessFormToSettle(page: Page): Promise<void> {
   await page
     .waitForSelector('#ctl00_contentSection_dataFields', {
       timeout: 10_000,
@@ -897,6 +904,7 @@ async function waitForProcessFormToSettle(page: puppeteer.Page): Promise<void> {
 
         return isDocumentReady && isAspNetPostBackIdle && isJQueryIdle;
       },
+      undefined,
       {
         timeout: 15_000,
       },
@@ -919,16 +927,17 @@ async function waitForProcessFormToSettle(page: puppeteer.Page): Promise<void> {
 
         return isAspNetPostBackIdle && isJQueryIdle;
       },
+      undefined,
       {
         timeout: 15_000,
       },
     )
     .catch(() => null);
 
-  await page.waitForNetworkIdle({ idleTime: 500, timeout: 8_000 }).catch(() => null);
+  await page.waitForLoadState('networkidle').catch(() => null);
 }
 
-export async function isAuthenticatedProcessPage(page: puppeteer.Page): Promise<boolean> {
+export async function isAuthenticatedProcessPage(page: Page): Promise<boolean> {
   const currentUrl = page.url().toLowerCase();
   if (
     currentUrl.includes('/login') ||
@@ -978,11 +987,17 @@ export async function setProcessInstanceFieldsToNull(
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
   const requestedUrl = buildProcessInstanceUrl(processUrlTemplate, env, processInstanceId);
   let visitedUrl = requestedUrl;
-  let page: puppeteer.Page | null = null;
+  let page: Page | null = null;
 
   try {
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    if (!browserInstance.isConnected()) {
+      throw new Error('Browser is not connected');
+    }
+
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
     page = await context.newPage();
     await optimizePageForAutomation(page);
 

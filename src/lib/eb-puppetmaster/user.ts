@@ -1,5 +1,12 @@
-import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager, optimizePageForAutomation } from './index.js';
+import { type Browser, type Page } from 'playwright';
+import {
+  Environment,
+  baseurl,
+  BrowserManager,
+  optimizePageForAutomation,
+  normalizeCookies,
+  type Cookie,
+} from './index.js';
 
 export type UserToDelete = {
   userName?: string;
@@ -7,18 +14,18 @@ export type UserToDelete = {
 
 type DeleteUserArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
-  page?: puppeteer.Page;
+  cookies: Cookie[];
+  browser?: Browser;
+  page?: Page;
   user: UserToDelete;
   dryRun: boolean;
 };
 
 type SetUserSsoArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
-  page?: puppeteer.Page;
+  cookies: Cookie[];
+  browser?: Browser;
+  page?: Page;
   userId: string;
   enabled: boolean;
   dryRun?: boolean;
@@ -28,9 +35,9 @@ export type UserFieldValueMap = Record<string, string>;
 
 type SetUserFieldsArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
-  page?: puppeteer.Page;
+  cookies: Cookie[];
+  browser?: Browser;
+  page?: Page;
   userId: string;
   fieldValues: UserFieldValueMap;
   dryRun?: boolean;
@@ -72,7 +79,7 @@ const cancelButton = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnNo';
 
 const userSaveSelector = '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnSave1';
 
-async function clickUserSave(page: puppeteer.Page): Promise<void> {
+async function clickUserSave(page: Page): Promise<void> {
   const match = await page.waitForSelector(userSaveSelector, { timeout: 30_000 });
   if (!match) {
     throw new Error(`Save button not found on user edit page: ${userSaveSelector}`);
@@ -84,7 +91,7 @@ async function clickUserSave(page: puppeteer.Page): Promise<void> {
   ]);
 }
 
-export async function setSsoField(page: puppeteer.Page, enabled: boolean): Promise<void> {
+export async function setSsoField(page: Page, enabled: boolean): Promise<void> {
   const setResult = await page.evaluate((value) => {
     const trigger = (el: HTMLElement): void => {
       el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -120,7 +127,7 @@ export async function setSsoField(page: puppeteer.Page, enabled: boolean): Promi
 }
 
 export async function setUserFieldsOnPage(
-  page: puppeteer.Page,
+  page: Page,
   fieldValues: UserFieldValueMap,
 ): Promise<{ updatedFields: string[]; notFoundFields: string[] }> {
   return page.evaluate((entries) => {
@@ -429,16 +436,18 @@ export async function deleteUser(options: DeleteUserArgs): Promise<void> {
 
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = options.page ?? null;
+  let page: Page | null = options.page ?? null;
   let ownPage = false;
 
   try {
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
 
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
 
     if (!page) {
       page = await context.newPage();
@@ -499,16 +508,18 @@ export async function setUserSso(options: SetUserSsoArgs): Promise<SetUserSsoRes
 
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = options.page ?? null;
+  let page: Page | null = options.page ?? null;
   let ownPage = false;
 
   try {
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
 
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
 
     if (!page) {
       page = await context.newPage();
@@ -561,16 +572,18 @@ export async function setUserFields(options: SetUserFieldsArgs): Promise<SetUser
 
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = options.page ?? null;
+  let page: Page | null = options.page ?? null;
   let ownPage = false;
 
   try {
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
 
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
 
     if (!page) {
       page = await context.newPage();
@@ -614,16 +627,16 @@ export async function setUserFields(options: SetUserFieldsArgs): Promise<SetUser
 
 type ListManagedUsersArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
-  page?: puppeteer.Page;
+  cookies: Cookie[];
+  browser?: Browser;
+  page?: Page;
 };
 
 type GetUserSsoStatusArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
-  page?: puppeteer.Page;
+  cookies: Cookie[];
+  browser?: Browser;
+  page?: Page;
   userId: string;
   viewUrl?: string;
 };
@@ -631,16 +644,18 @@ type GetUserSsoStatusArgs = {
 export async function listManagedUsers(options: ListManagedUsersArgs): Promise<ManagedUserRow[]> {
   const { env, cookies, browser } = options;
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
-  let page: puppeteer.Page | null = options.page ?? null;
+  let page: Page | null = options.page ?? null;
   let ownPage = false;
 
   try {
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
 
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
 
     if (!page) {
       page = await context.newPage();
@@ -739,16 +754,18 @@ export async function listManagedUsers(options: ListManagedUsersArgs): Promise<M
 export async function getUserSsoStatus(options: GetUserSsoStatusArgs): Promise<UserSsoStatus> {
   const { env, cookies, browser, userId, viewUrl } = options;
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
-  let page: puppeteer.Page | null = options.page ?? null;
+  let page: Page | null = options.page ?? null;
   let ownPage = false;
 
   try {
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
 
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
 
     if (!page) {
       page = await context.newPage();

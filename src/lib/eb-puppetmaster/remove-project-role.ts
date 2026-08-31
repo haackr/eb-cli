@@ -1,20 +1,18 @@
-import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager } from './index.js';
+import { type Browser, type Page, type Frame, type ElementHandle } from 'playwright';
+import { Environment, baseurl, BrowserManager, normalizeCookies, type Cookie } from './index.js';
 import { getPortalIdByProjectName } from './project.js';
 
 export type RemoveUserFromProjectRoleArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
+  cookies: Cookie[];
+  browser?: Browser;
   projectName: string;
   roleName: string;
   userNames: string[];
   dryRun: boolean;
 };
 
-export async function findRemoveButton(
-  userFrame: puppeteer.Frame | puppeteer.Page,
-): Promise<puppeteer.ElementHandle | null> {
+export async function findRemoveButton(userFrame: Frame | Page): Promise<ElementHandle | null> {
   const selectors = [
     '#btnRoleRemove',
     '#btnRemove',
@@ -43,7 +41,7 @@ export async function findRemoveButton(
 }
 
 export async function selectMatchingUsersOnCurrentPage(
-  userFrame: puppeteer.Frame | puppeteer.Page,
+  userFrame: Frame | Page,
   requestedKeys: string[],
 ): Promise<string[]> {
   return await userFrame.evaluate((keys: string[]) => {
@@ -152,13 +150,15 @@ export async function removeUserFromProjectRoleByName(
   const { env, cookies, browser, projectName, roleName, userNames, dryRun } = options;
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = null;
+  let page: Page | null = null;
   try {
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
     page = await context.newPage();
 
     // Auto-accept any confirmation dialogs (e.g. "Are you sure you want to remove...")
@@ -191,7 +191,7 @@ export async function removeUserFromProjectRoleByName(
     const roleLinks = await roleFrame.$$(
       '#dgAccountRoles a[name="selectedGroup"], #dgAccountRoles a, table a',
     );
-    let roleLink: puppeteer.ElementHandle | null = null;
+    let roleLink: ElementHandle | null = null;
     for (const link of roleLinks) {
       const text = await link.evaluate((el) => el.textContent?.trim() ?? '');
       if (text.toLowerCase() === targetRoleNameNorm) {
@@ -203,12 +203,12 @@ export async function removeUserFromProjectRoleByName(
 
     // Click role link and wait for the right pane iframe to reload with users
     await Promise.all([
-      page.waitForNetworkIdle({ idleTime: 500, timeout: 15_000 }).catch(() => null),
+      page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => null),
       roleLink.click(),
     ]);
 
     // 4. Helper to get the user list iframe
-    async function getUserFrame(): Promise<puppeteer.Frame> {
+    async function getUserFrame(): Promise<Frame> {
       const userListFrameEl = await page!.waitForSelector(
         'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList, iframe[name*="userList"]',
         { timeout: 30_000 },
@@ -250,7 +250,7 @@ export async function removeUserFromProjectRoleByName(
           }
 
           await Promise.all([
-            page.waitForNetworkIdle({ idleTime: 500, timeout: 20_000 }).catch(() => null),
+            page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => null),
             removeBtn.click(),
           ]);
 
@@ -288,12 +288,12 @@ export async function removeUserFromProjectRoleByName(
         );
       });
 
-      const nextLinkEl = nextGridLink.asElement();
+      const nextLinkEl = nextGridLink.asElement() as ElementHandle<HTMLElement> | null;
       if (!nextLinkEl) break;
 
       await Promise.all([
-        page.waitForNetworkIdle({ idleTime: 500, timeout: 15_000 }).catch(() => null),
-        (nextLinkEl as puppeteer.ElementHandle<HTMLElement>).click(),
+        page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => null),
+        nextLinkEl.click(),
       ]);
 
       userFrame = await getUserFrame();

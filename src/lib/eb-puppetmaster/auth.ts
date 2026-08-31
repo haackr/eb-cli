@@ -1,13 +1,11 @@
-import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager } from './index.js';
+import { type Browser, type Page } from 'playwright';
+import { Environment, baseurl, BrowserManager, normalizeCookies, type Cookie } from './index.js';
 
 // Selectors for the login page
-const usernameSelector = '#txtUsername >>> #mwc_id_0_text_input';
-const usernameContinueButtonSelector = '#usernameContinueBtn >>> button';
-const passwordSelector = '#txtPassword >>> #mwc_id_1_text_input';
-const signInButtonSelector = '#signIn >>> button';
-const selectAccountSelector = '#selectAccount >>> select';
-const selectAccountContinueButtonSelector = '#selectAccountContinueBtn >>> button';
+const usernameSelector = '#txtUsername input';
+const usernameContinueButtonSelector = '#usernameContinueBtn button';
+const passwordSelector = '#txtPassword input';
+const signInButtonSelector = '#signIn button';
 const myHomeTabSelector = '#ctl00_ucTopNav2_tabHomeLink';
 const errorMessageSelector = '#errorMessage';
 const changePasswordUrl = '/auth/Authenticate/LoginSequence.aspx';
@@ -22,42 +20,26 @@ export type Account = {
   text: string;
 };
 
-async function getAccounts(accountOptions: puppeteer.ElementHandle[]): Promise<Account[]> {
-  let accounts: Account[] = [];
-  for (let i = 1; i < accountOptions.length; i++) {
-    const optionValue = await accountOptions[i]?.evaluate((el) => (el as HTMLOptionElement).value);
-    const optionText = await accountOptions[i]?.evaluate((el) => el.textContent ?? '');
-    accounts.push({ value: String(optionValue), text: String(optionText) });
-  }
-  return accounts;
+function getAllPages(browser: Browser): Page[] {
+  return browser.contexts().flatMap((context) => context.pages());
 }
 
-async function selectAccount(
-  accountSelector: puppeteer.ElementHandle,
-  account: string,
-  accountOptions: Account[],
-): Promise<void> {
-  for (const option of accountOptions) {
-    if (option.text.includes(account)) {
-      console.log('Found account');
-      await accountSelector?.select(option.value);
-      break;
-    }
+function isTrimbleIdPage(page: Page): boolean {
+  try {
+    return new URL(page.url()).hostname === 'id.trimble.com';
+  } catch {
+    return false;
   }
 }
 
-function isTrimbleIdPage(page: puppeteer.Page): boolean {
-  return new URL(page.url()).hostname === 'id.trimble.com';
-}
-
-async function getTrimbleIdPage(browser: puppeteer.Browser): Promise<puppeteer.Page | undefined> {
-  return (await browser.pages()).find((openPage) => isTrimbleIdPage(openPage));
+async function getTrimbleIdPage(browser: Browser): Promise<Page | undefined> {
+  return getAllPages(browser).find((openPage) => isTrimbleIdPage(openPage));
 }
 
 async function waitForTrimbleIdPage(
-  browser: puppeteer.Browser,
+  browser: Browser,
   timeout: number = 10_000,
-): Promise<puppeteer.Page | undefined> {
+): Promise<Page | undefined> {
   const timeoutAt = Date.now() + timeout;
 
   while (Date.now() < timeoutAt) {
@@ -69,25 +51,38 @@ async function waitForTrimbleIdPage(
   return undefined;
 }
 
-async function getSelectedAccount(page: puppeteer.Page): Promise<Account | undefined> {
-  const accountSelector = await page.$(selectAccountSelector);
-  if (!accountSelector) return;
+async function getSelectedAccount(page: Page): Promise<Account | undefined> {
+  return await page
+    .evaluate(() => {
+      const mwcSelect = document.querySelector('#selectAccount') as any;
+      if (!mwcSelect) return undefined;
+      const nativeSelect =
+        mwcSelect.shadowRoot?.querySelector('select') || mwcSelect.querySelector('select');
+      const selectedValue = mwcSelect.value || nativeSelect?.value;
+      if (!selectedValue) return undefined;
 
-  const selectedValue = await accountSelector.evaluate((element) => {
-    return (element as HTMLSelectElement).value;
-  });
-  if (!selectedValue) return;
+      const optionElements: any[] = nativeSelect
+        ? Array.from(nativeSelect.querySelectorAll('option'))
+        : Array.from(mwcSelect.querySelectorAll('mwc-list-item, option'));
 
-  const accounts = await getAccounts(await page.$$(selectAccountSelector + ' option'));
-  return accounts.find((account) => account.value === selectedValue);
+      const found = optionElements.find(
+        (opt) => (opt.value || opt.getAttribute?.('value')) === selectedValue,
+      );
+      if (!found) return undefined;
+      return {
+        value: selectedValue,
+        text: (found.textContent || '').trim(),
+      };
+    })
+    .catch(() => undefined);
 }
 
 const accountSelectionBindingName = '__ebCliAccountSelected';
 
 async function watchAccountSelection(
-  page: puppeteer.Page,
-  boundPages: WeakSet<puppeteer.Page>,
-  watchedPages: WeakSet<puppeteer.Page>,
+  page: Page,
+  boundPages: WeakSet<Page>,
+  watchedPages: WeakSet<Page>,
   onAccountSelected: (account: Account) => void,
 ): Promise<void> {
   if (!boundPages.has(page)) {
@@ -99,46 +94,63 @@ async function watchAccountSelection(
 
   if (watchedPages.has(page)) return;
 
-  const accountSelector = await page.$(selectAccountSelector);
-  if (!accountSelector) return;
+  await page
+    .evaluate((bindingName) => {
+      const mwcSelect = document.querySelector('#selectAccount') as any;
+      if (!mwcSelect) return;
 
-  await accountSelector.evaluate((element, bindingName) => {
-    const select = element as HTMLSelectElement;
-    select.addEventListener('change', () => {
-      const selectedOption = select.selectedOptions.item(0);
-      if (!selectedOption?.value) return;
+      const notify = () => {
+        const nativeSelect =
+          mwcSelect.shadowRoot?.querySelector('select') || mwcSelect.querySelector('select');
+        const val = mwcSelect.value || nativeSelect?.value;
+        const selectedOption = nativeSelect?.selectedOptions?.item(0);
+        const text = selectedOption?.text || mwcSelect.selectedText || val;
+        if (!val) return;
 
-      const binding = (window as unknown as Record<string, (value: string, text: string) => void>)[
-        bindingName
-      ];
-      binding?.(selectedOption.value, selectedOption.text);
-    });
-  }, accountSelectionBindingName);
+        const binding = (
+          window as unknown as Record<string, (value: string, text: string) => void>
+        )[bindingName];
+        binding?.(val, text);
+      };
+
+      mwcSelect.addEventListener('change', notify);
+      mwcSelect.addEventListener('selected', notify);
+      const nativeSelect =
+        mwcSelect.shadowRoot?.querySelector('select') || mwcSelect.querySelector('select');
+      nativeSelect?.addEventListener('change', notify);
+    }, accountSelectionBindingName)
+    .catch(() => {});
+
   watchedPages.add(page);
 }
 
 function isNavigationRace(error: unknown): boolean {
   return (
     error instanceof Error &&
-    /Execution context was destroyed|Argument should belong to the same JavaScript world/.test(
+    /Execution context was destroyed|Argument should belong to the same JavaScript world|Target closed|frame was detached/.test(
       error.message,
     )
   );
 }
 
 async function waitForEBuilderHome(
-  browser: puppeteer.Browser,
+  browser: Browser,
   env: Environment,
   onAccountSelected?: (account: Account) => void,
 ): Promise<void> {
   const eBuilderHost = `${env}.${baseurl}`;
   const timeoutAt = Date.now() + 10 * 60_000;
-  const boundPages = new WeakSet<puppeteer.Page>();
-  const watchedPages = new WeakSet<puppeteer.Page>();
+  const boundPages = new WeakSet<Page>();
+  const watchedPages = new WeakSet<Page>();
 
   while (Date.now() < timeoutAt) {
-    for (const openPage of await browser.pages()) {
-      const url = new URL(openPage.url());
+    for (const openPage of getAllPages(browser)) {
+      let url: URL;
+      try {
+        url = new URL(openPage.url());
+      } catch {
+        continue;
+      }
       if (url.hostname !== eBuilderHost) continue;
 
       let account: Account | undefined;
@@ -162,28 +174,28 @@ async function waitForEBuilderHome(
 }
 
 async function completeTrimbleIdLogin(
-  browser: puppeteer.Browser,
-  page: puppeteer.Page,
+  browser: Browser,
+  page: Page,
   env: Environment,
   headless: boolean,
   username?: string,
   password?: string,
   onAccountSelected?: (account: Account) => void,
-): Promise<puppeteer.Cookie[]> {
+): Promise<Cookie[]> {
   let authBrowser = browser;
   let authPage = page;
 
   if (headless) {
     const trimbleUrl = page.url();
-    const cookies = await browser.cookies();
+    const context = page.context();
+    const cookies = await context.cookies();
 
     await BrowserManager.getInstance().closeBrowser();
     authBrowser = await BrowserManager.getInstance().getBrowser(false, ['--window-size=1200,800']);
-    await authBrowser.defaultBrowserContext().setCookie(...cookies);
+    const newContext = await authBrowser.newContext();
+    await newContext.addCookies(normalizeCookies(cookies));
 
-    const [visiblePage] = await authBrowser.pages();
-    if (!visiblePage) throw new Error('No page found');
-    authPage = visiblePage;
+    authPage = await newContext.newPage();
     await authPage.goto(trimbleUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
   }
 
@@ -192,20 +204,16 @@ async function completeTrimbleIdLogin(
     await authPage.locator(trimbleUsernameContinueButtonSelector).click();
   }
   if (password) {
-    await authPage.waitForFunction(
-      (selector) => {
-        const input = document.querySelector<HTMLInputElement>(selector);
-        return Boolean(input && !input.disabled && input.getClientRects().length > 0);
-      },
-      {},
-      trimblePasswordSelector,
-    );
+    await authPage.waitForFunction((selector) => {
+      const input = document.querySelector<HTMLInputElement>(selector);
+      return Boolean(input && !input.disabled && input.getClientRects().length > 0);
+    }, trimblePasswordSelector);
     await authPage.locator(trimblePasswordSelector).fill(password);
     await authPage.locator(trimbleSignInButtonSelector).click();
   }
 
   await waitForEBuilderHome(authBrowser, env, onAccountSelected);
-  return await authBrowser.cookies();
+  return await authPage.context().cookies();
 }
 
 export async function login(
@@ -215,16 +223,17 @@ export async function login(
   password?: string,
   account?: string,
   accountSpecifier?: Function,
-  browser?: puppeteer.Browser,
+  browser?: Browser,
   onAccountSelected?: (account: Account) => void,
-): Promise<puppeteer.Cookie[]> {
+): Promise<Cookie[]> {
   if (!browser) {
     browser = await BrowserManager.getInstance().getBrowser(headless, [
       `--app=http://${env}.${baseurl}`,
       `--window-size=800,600`,
     ]);
   }
-  const [page] = await browser.pages();
+  const context = browser.contexts()[0] ?? (await browser.newContext());
+  const page = context.pages()[0] ?? (await context.newPage());
 
   if (!page) throw new Error('No page found');
   page.setDefaultNavigationTimeout(90_000);
@@ -235,12 +244,9 @@ export async function login(
 
   if (username) {
     await page.locator(usernameSelector).fill(username);
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90_000 }),
-      page.locator(usernameContinueButtonSelector).click(),
-    ]);
+    await page.locator(usernameContinueButtonSelector).click();
 
-    const trimbleIdPage = await waitForTrimbleIdPage(browser);
+    const trimbleIdPage = await waitForTrimbleIdPage(browser, 4000);
     if (trimbleIdPage) {
       return await completeTrimbleIdLogin(
         browser,
@@ -258,50 +264,218 @@ export async function login(
         throw new Error('Password must be provided for headless mode.');
       }
 
-      await waitForEBuilderHome(browser, env);
-      return await browser.cookies();
+      await waitForEBuilderHome(browser, env, onAccountSelected);
+      return await context.cookies();
     }
 
+    await page.locator(passwordSelector).waitFor({ state: 'visible', timeout: 15_000 });
     await page.locator(passwordSelector).fill(password);
     await page.locator(signInButtonSelector).click();
-    await page.waitForNetworkIdle();
-    const errorMessageBox = await page.$(errorMessageSelector);
-    if (errorMessageBox && (await errorMessageBox.isVisible()))
-      throw new Error(
-        'Invalid username / password or account is locked or user already has maximum sessions open',
-      );
-    // await page.waitForNavigation();
 
-    if (account) {
-      console.log(account);
-      const accountSelector = await page.waitForSelector(selectAccountSelector);
-      if (!accountSelector) throw new Error('Account selector not found');
-      const accountOptions = await page.$$(selectAccountSelector + ' option');
-      const accounts = await getAccounts(accountOptions);
-      await selectAccount(accountSelector, account, accounts);
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90_000 }),
-        page.locator(selectAccountContinueButtonSelector).click(),
-      ]);
-    } else {
-      const accountSelector = await page.$(selectAccountSelector);
-      if (accountSelector) {
-        const accountOpttions = await page.$$(selectAccountSelector + ' option');
-        const accounts = await getAccounts(accountOpttions);
-        if (!accountSpecifier) throw new Error('Account specifier must be provided');
-        const selectedAccount = await accountSpecifier(accounts);
-        await accountSelector?.select(selectedAccount);
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90_000 }),
-          page.locator(selectAccountContinueButtonSelector).click(),
-        ]);
+    const pollStart = Date.now();
+    const pollTimeout = 30_000;
+    while (Date.now() - pollStart < pollTimeout) {
+      if (page.url().includes('/da2/Home/')) {
+        break;
       }
+
+      const errorMessageBox = page.locator(errorMessageSelector);
+      if (await errorMessageBox.isVisible().catch(() => false)) {
+        throw new Error(
+          'Invalid username / password or account is locked or user already has maximum sessions open',
+        );
+      }
+
+      if (page.url().includes(changePasswordUrl)) {
+        throw new Error(
+          'Password change required. Please login manually and change your password.',
+        );
+      }
+
+      const accounts = await page
+        .evaluate(() => {
+          const mwcSelect = document.querySelector('#selectAccount') as any;
+          if (!mwcSelect) return [];
+          const rect = mwcSelect.getBoundingClientRect();
+          const style = window.getComputedStyle(mwcSelect);
+          if (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            (rect.width === 0 && rect.height === 0)
+          ) {
+            return [];
+          }
+
+          const mwcItems = Array.from(mwcSelect.querySelectorAll('mwc-list-item')) as any[];
+          if (mwcItems.length > 0) {
+            return mwcItems
+              .map((item) => ({
+                value: String(item.value || item.getAttribute?.('value') || '').trim(),
+                text: String(item.textContent || '').trim(),
+              }))
+              .filter(
+                (opt) =>
+                  opt.value &&
+                  opt.value !== '0' &&
+                  opt.text &&
+                  !opt.text.toLowerCase().includes('select account') &&
+                  opt.text !== '-- Select --' &&
+                  opt.text !== 'Select...',
+              );
+          }
+
+          const nativeSelect =
+            mwcSelect.shadowRoot?.querySelector('select') || mwcSelect.querySelector('select');
+          if (nativeSelect) {
+            return Array.from(nativeSelect.options as HTMLOptionElement[])
+              .map((opt) => ({
+                value: String(opt.value || '').trim(),
+                text: String(opt.text || opt.textContent || '').trim(),
+              }))
+              .filter(
+                (opt) =>
+                  opt.value &&
+                  opt.value !== '0' &&
+                  opt.text &&
+                  !opt.text.toLowerCase().includes('select account') &&
+                  opt.text !== '-- Select --' &&
+                  opt.text !== 'Select...',
+              );
+          }
+
+          return [];
+        })
+        .catch(() => []);
+
+      if (accounts.length > 0) {
+        let chosenAccount: Account | undefined;
+        if (account) {
+          chosenAccount = accounts.find((a) => a.text.includes(account) || a.value === account);
+          if (!chosenAccount && accountSpecifier) {
+            chosenAccount = await accountSpecifier(accounts);
+          }
+        } else if (accounts.length === 1) {
+          chosenAccount = accounts[0];
+        } else if (accountSpecifier) {
+          chosenAccount = await accountSpecifier(accounts);
+        }
+
+        if (chosenAccount) {
+          const accountVal =
+            typeof chosenAccount === 'object' && chosenAccount !== null
+              ? chosenAccount.value
+              : String(chosenAccount);
+          const accountObj: Account =
+            typeof chosenAccount === 'object' && chosenAccount !== null
+              ? chosenAccount
+              : (accounts.find((a) => a.value === accountVal) ?? {
+                  value: accountVal,
+                  text: accountVal,
+                });
+
+          onAccountSelected?.(accountObj);
+
+          await page.evaluate((targetVal) => {
+            const mwcSelect = document.querySelector('#selectAccount') as any;
+            if (!mwcSelect) return;
+
+            const mwcItems = Array.from(mwcSelect.querySelectorAll('mwc-list-item')) as any[];
+            if (mwcItems.length > 0) {
+              const idx = mwcItems.findIndex(
+                (item) =>
+                  String(item.value || item.getAttribute?.('value') || '').trim() === targetVal,
+              );
+              if (idx !== -1) {
+                if (typeof mwcSelect.select === 'function') {
+                  try {
+                    mwcSelect.select(idx);
+                  } catch {}
+                }
+                const targetItem = mwcItems[idx];
+                if (targetItem) {
+                  try {
+                    targetItem.click();
+                  } catch {}
+                  targetItem.selected = true;
+                  targetItem.setAttribute?.('selected', '');
+                }
+              }
+            }
+
+            try {
+              mwcSelect.value = targetVal;
+            } catch {}
+
+            const nativeSelect =
+              mwcSelect.shadowRoot?.querySelector('select') || mwcSelect.querySelector('select');
+            if (nativeSelect) {
+              nativeSelect.value = targetVal;
+              const options = Array.from(nativeSelect.options) as HTMLOptionElement[];
+              for (const opt of options) {
+                opt.selected = String(opt.value).trim() === targetVal;
+              }
+              nativeSelect.dispatchEvent(new Event('input', { bubbles: true }));
+              nativeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+
+            mwcSelect.dispatchEvent(
+              new CustomEvent('selected', {
+                detail: { value: targetVal },
+                bubbles: true,
+              }),
+            );
+            mwcSelect.dispatchEvent(
+              new CustomEvent('action', { detail: { value: targetVal }, bubbles: true }),
+            );
+            mwcSelect.dispatchEvent(new Event('input', { bubbles: true }));
+            mwcSelect.dispatchEvent(new Event('change', { bubbles: true }));
+
+            const selectedTextEl =
+              mwcSelect.shadowRoot?.querySelector('.mdc-select__selected-text') ||
+              mwcSelect.querySelector('.mdc-select__selected-text');
+            const matchingAccount =
+              mwcItems.find(
+                (item) =>
+                  String(item.value || item.getAttribute?.('value') || '').trim() === targetVal,
+              ) ||
+              (nativeSelect
+                ? Array.from(nativeSelect.options).find(
+                    (opt: any) => String(opt.value).trim() === targetVal,
+                  )
+                : null);
+            if (selectedTextEl && matchingAccount) {
+              const text = (matchingAccount.textContent || matchingAccount.text || '').trim();
+              if (text) selectedTextEl.textContent = text;
+            }
+
+            const continueBtn = document.querySelector('#selectAccountContinueBtn') as any;
+            if (continueBtn) {
+              continueBtn.disabled = false;
+              continueBtn.removeAttribute('disabled');
+              continueBtn.click();
+              const innerBtn =
+                continueBtn.shadowRoot?.querySelector('button') ||
+                continueBtn.querySelector('button');
+              if (innerBtn) {
+                innerBtn.disabled = false;
+                innerBtn.removeAttribute('disabled');
+                innerBtn.click();
+              }
+            }
+          }, accountVal);
+
+          break;
+        }
+      }
+
+      await page.waitForTimeout(300);
     }
+
+    await waitForEBuilderHome(browser, env, onAccountSelected);
   } else if (headless) {
     throw new Error('Username and password must be provided for headless mode');
   } else {
     await page.waitForSelector(usernameSelector);
-    await page.waitForNavigation();
     const trimbleIdPage = await waitForTrimbleIdPage(browser);
     if (trimbleIdPage) {
       return await completeTrimbleIdLogin(
@@ -315,25 +489,22 @@ export async function login(
       );
     }
     await page.waitForSelector(passwordSelector);
-    await page.waitForNavigation();
-    if (await page.$(selectAccountSelector)) {
-      await page.waitForNavigation();
-    }
+    await waitForEBuilderHome(browser, env, onAccountSelected);
   }
 
   if (page.url().includes(changePasswordUrl)) {
     throw new Error('Password change required. Please login manually and change your password.');
   }
 
-  const cookies = await browser.cookies();
+  const cookies = await context.cookies();
   return cookies;
 }
 
 export async function loginWithSso(
   env: Environment,
   ssoUrl: string,
-  browser?: puppeteer.Browser,
-): Promise<puppeteer.Cookie[]> {
+  browser?: Browser,
+): Promise<Cookie[]> {
   let url: URL;
   try {
     url = new URL(ssoUrl);
@@ -353,7 +524,8 @@ export async function loginWithSso(
     );
   }
 
-  const [page] = await browser.pages();
+  const context = browser.contexts()[0] ?? (await browser.newContext());
+  const page = context.pages()[0] ?? (await context.newPage());
   if (!page) throw new Error('No page found');
   page.setDefaultNavigationTimeout(90_000);
   page.setDefaultTimeout(90_000);
@@ -361,17 +533,17 @@ export async function loginWithSso(
   await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90_000 });
 
   await waitForEBuilderHome(browser, env);
-  return await browser.cookies();
+  return await context.cookies();
 }
 
 export async function isLoggedIn(
   env: Environment,
   headless: boolean = true,
-  cookies: puppeteer.Cookie[],
-  browser?: puppeteer.Browser,
-): Promise<{ isLoggedIn: boolean; newCookies: puppeteer.Cookie[] }> {
+  cookies: Cookie[],
+  browser?: Browser,
+): Promise<{ isLoggedIn: boolean; newCookies: Cookie[] }> {
   let loggedIn = false;
-  let newCookies: puppeteer.Cookie[] = [];
+  let newCookies: Cookie[] = [];
   if (!browser) {
     browser = await BrowserManager.getInstance().getBrowser(headless, [
       `--app=http://${env}.${baseurl}`,
@@ -379,13 +551,13 @@ export async function isLoggedIn(
   }
 
   // Create a new browser context for isolation
-  const context = await browser.createBrowserContext();
+  const context = await browser.newContext();
   const page = await context.newPage();
   page.setDefaultNavigationTimeout(90_000);
   page.setDefaultTimeout(90_000);
 
-  // Clear existing cookies and set new ones
-  await context.setCookie(...cookies);
+  // Set cookies
+  await context.addCookies(normalizeCookies(cookies));
   await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`, {
     waitUntil: 'domcontentloaded',
     timeout: 90_000,
@@ -409,8 +581,8 @@ export async function isLoggedIn(
 export async function logout(
   env: Environment,
   headless: boolean = true,
-  cookies: puppeteer.Cookie[],
-  browser?: puppeteer.Browser,
+  cookies: Cookie[],
+  browser?: Browser,
 ): Promise<void> {
   if (!browser) {
     browser = await BrowserManager.getInstance().getBrowser(headless, [
@@ -419,12 +591,12 @@ export async function logout(
   }
 
   // Create a new browser context for isolation
-  const context = await browser.createBrowserContext();
+  const context = await browser.newContext();
   const page = await context.newPage();
   page.setDefaultNavigationTimeout(90_000);
   page.setDefaultTimeout(90_000);
 
-  await context.setCookie(...cookies);
+  await context.addCookies(normalizeCookies(cookies));
   await page.goto(`https://${env}.${baseurl}/Login/Logout.aspx`, {
     waitUntil: 'domcontentloaded',
     timeout: 90_000,

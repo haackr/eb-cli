@@ -1,18 +1,18 @@
-import puppeteer from 'puppeteer';
-import { Environment, baseurl, BrowserManager } from './index.js';
+import { type Browser, type Page, type Frame } from 'playwright';
+import { Environment, baseurl, BrowserManager, normalizeCookies, type Cookie } from './index.js';
 import { getPortalIdByProjectName } from './project.js';
 
 export type RemoveUserFromProjectArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
+  cookies: Cookie[];
+  browser?: Browser;
   projectName: string;
   userNames: string[];
   dryRun: boolean;
 };
 
 export async function selectUsersInProjectGrid(
-  userFrame: puppeteer.Frame | puppeteer.Page,
+  userFrame: Frame | Page,
   keys: string[],
 ): Promise<string[]> {
   return await userFrame.evaluate((keys: string[]) => {
@@ -55,14 +55,16 @@ export async function removeUserFromProjectByName(
   const { env, cookies, browser, projectName, userNames, dryRun } = options;
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = null;
+  let page: Page | null = null;
   try {
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
 
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
     page = await context.newPage();
 
     // 1. Find the project's PortalID from the project list
@@ -70,7 +72,7 @@ export async function removeUserFromProjectByName(
 
     // 2. Navigate to the project participants page
     const projectParticipantsUrl = `https://${env}.${baseurl}/da2/Projects/ProjectParticipants.aspx?PortalID={${portalId}}`;
-    await page.goto(projectParticipantsUrl, { waitUntil: 'networkidle0' });
+    await page.goto(projectParticipantsUrl, { waitUntil: 'domcontentloaded' });
 
     // 3. Get the user list iframe
     const userListFrameEl = await page.waitForSelector(
@@ -97,9 +99,9 @@ export async function removeUserFromProjectByName(
     if (!dryRun && matchedKeys.size > 0) {
       const removeBtn = await userFrame.waitForSelector('#btnRemove');
       if (!removeBtn) throw new Error('Remove from Project button not found');
-      page.once('dialog', (dialog) => dialog.accept());
+      page.once('dialog', (dialog) => dialog.accept().catch(() => {}));
       await removeBtn.click();
-      await page.waitForNetworkIdle();
+      await page.waitForLoadState('networkidle').catch(() => null);
       await userFrame.waitForSelector('#grdResults');
     }
 

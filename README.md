@@ -14,7 +14,7 @@ USAGE
 ...
 ```
 
-On Linux, the CLI downloads Chrome automatically the first time a browser-backed command runs. It only attempts to install Chrome system packages automatically when running as `root` or when `EB_PUPPETEER_INSTALL_DEPS=1` is set. In restricted cloud terminals, leave that variable unset and install any missing Chrome libraries manually if browser launch still fails.
+On Linux and other platforms, the CLI launches Playwright Chromium with support for system Chrome and bundled Chromium engines.
 
 <!-- usagestop -->
 

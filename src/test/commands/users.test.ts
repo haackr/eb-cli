@@ -57,32 +57,26 @@ describe('User Commands (src/commands/users/)', () => {
       const csvPath = path.join(tmpDir, 'sso.csv');
       fs.writeFileSync(csvPath, 'User ID,Single Sign-On\n1001,true\n1002,false\n', 'utf8');
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => ({}),
-          }),
-          setCookie: async () => {},
-          cookies: async () => [{ name: 'sid', value: '1' }],
+      const mockContext = {
+        addCookies: async () => {},
+        cookies: async () => [{ name: 'sid', value: '1' }],
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForSelector: async () => ({}),
+          url: () => 'https://app.e-builder.net/da2/Setup/Admin/Users/AddEditUser.aspx?UserID=1001',
+          evaluate: async () => ({ found: true }),
+          $: async () => ({ click: async () => {} }),
           close: async () => {},
         }),
-        defaultBrowserContext: () => ({
-          setCookie: async () => {},
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            url: () =>
-              'https://app.e-builder.net/da2/Setup/Admin/Users/AddEditUser.aspx?UserID=1001',
-            evaluate: async () => ({ found: true }),
-            $: async () => ({ click: async () => {} }),
-            close: async () => {},
-          }),
-        }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
@@ -109,35 +103,29 @@ describe('User Commands (src/commands/users/)', () => {
       const csvPath = path.join(tmpDir, 'fields.csv');
       fs.writeFileSync(csvPath, 'User ID,First Name,Company\n2001,John,Acme\n', 'utf8');
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => ({}),
+      const mockContext = {
+        addCookies: async () => {},
+        cookies: async () => [{ name: 'sid', value: '1' }],
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForSelector: async () => ({}),
+          url: () => 'https://app.e-builder.net/da2/Setup/Admin/Users/AddEditUser.aspx?UserID=2001',
+          evaluate: async () => ({
+            updatedFields: ['First Name', 'Company'],
+            notFoundFields: [],
           }),
-          setCookie: async () => {},
-          cookies: async () => [{ name: 'sid', value: '1' }],
+          $: async () => ({ click: async () => {} }),
           close: async () => {},
         }),
-        defaultBrowserContext: () => ({
-          setCookie: async () => {},
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            url: () =>
-              'https://app.e-builder.net/da2/Setup/Admin/Users/AddEditUser.aspx?UserID=2001',
-            evaluate: async () => ({
-              updatedFields: ['First Name', 'Company'],
-              notFoundFields: [],
-            }),
-            $: async () => ({ click: async () => {} }),
-            close: async () => {},
-          }),
-        }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
@@ -163,34 +151,29 @@ describe('User Commands (src/commands/users/)', () => {
       const csvPath = path.join(tmpDir, 'users_to_delete.csv');
       fs.writeFileSync(csvPath, 'Username\nold.user@example.com\n', 'utf8');
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => ({}),
+      const mockContext = {
+        addCookies: async () => {},
+        cookies: async () => [{ name: 'sid', value: '1' }],
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForSelector: async () => ({}),
+          url: () => 'https://app.e-builder.net/da2/Setup/Admin/Users/ManageUsers.aspx',
+          locator: () => ({
+            fill: async () => {},
+            click: async () => {},
           }),
-          setCookie: async () => {},
-          cookies: async () => [{ name: 'sid', value: '1' }],
+          waitForNavigation: async () => {},
           close: async () => {},
         }),
-        defaultBrowserContext: () => ({
-          setCookie: async () => {},
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            url: () => 'https://app.e-builder.net/da2/Setup/Admin/Users/ManageUsers.aspx',
-            locator: () => ({
-              fill: async () => {},
-              click: async () => {},
-            }),
-            waitForNavigation: async () => {},
-            close: async () => {},
-          }),
-        }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
@@ -220,63 +203,57 @@ describe('User Commands (src/commands/users/)', () => {
         'utf8',
       );
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => ({}),
-          }),
-          setCookie: async () => {},
-          cookies: async () => [{ name: 'sid', value: '1' }],
+      const mockContext = {
+        addCookies: async () => {},
+        cookies: async () => [{ name: 'sid', value: '1' }],
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          on: () => {},
+          goto: async () => {},
+          waitForSelector: async (selector: string) => {
+            if (selector.includes('groupList')) {
+              return {
+                contentFrame: async () => ({
+                  waitForSelector: async () => {},
+                  $$: async () => [
+                    {
+                      evaluate: async () => 'Architect',
+                      click: async () => {},
+                    },
+                  ],
+                }),
+              };
+            }
+            if (selector.includes('userList')) {
+              return {
+                contentFrame: async () => ({
+                  waitForSelector: async () => {},
+                  evaluate: async () => ['alice.manager'],
+                  evaluateHandle: async () => ({
+                    asElement: () => null,
+                    dispose: async () => {},
+                  }),
+                }),
+              };
+            }
+            if (selector.includes('#dgAccountRoles')) {
+              return {};
+            }
+            return {};
+          },
+          waitForLoadState: async () => {},
+          evaluate: async () => [{ name: 'Hospital Expansion', portalId: '12345' }],
+          $: async () => null,
           close: async () => {},
         }),
-        defaultBrowserContext: () => ({
-          setCookie: async () => {},
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            on: () => {},
-            goto: async () => {},
-            waitForSelector: async (selector: string) => {
-              if (selector.includes('groupList')) {
-                return {
-                  contentFrame: async () => ({
-                    waitForSelector: async () => {},
-                    $$: async () => [
-                      {
-                        evaluate: async () => 'Architect',
-                        click: async () => {},
-                      },
-                    ],
-                  }),
-                };
-              }
-              if (selector.includes('userList')) {
-                return {
-                  contentFrame: async () => ({
-                    waitForSelector: async () => {},
-                    evaluate: async () => ['alice.manager'],
-                    evaluateHandle: async () => ({
-                      asElement: () => null,
-                      dispose: async () => {},
-                    }),
-                  }),
-                };
-              }
-              if (selector.includes('#dgAccountRoles')) {
-                return {};
-              }
-              return {};
-            },
-            waitForNetworkIdle: async () => {},
-            evaluate: async () => [{ name: 'Hospital Expansion', portalId: '12345' }],
-            $: async () => null,
-            close: async () => {},
-          }),
-        }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;

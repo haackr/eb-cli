@@ -1,4 +1,4 @@
-import puppeteer from 'puppeteer';
+import { type Page, type ElementHandle } from 'playwright';
 import { Environment, baseurl } from './index.js';
 
 const projectListPath = '/da2/Projects/ProjectList.aspx';
@@ -22,7 +22,7 @@ export function clearProjectCache(): void {
  * Populates the in-memory cache with all discovered projects.
  */
 async function extractAndCacheProjectsOnPage(
-  page: puppeteer.Page,
+  page: Page,
   env: Environment,
 ): Promise<{ name: string; portalId: string }[]> {
   const projects = await page.evaluate(() => {
@@ -53,10 +53,7 @@ async function extractAndCacheProjectsOnPage(
  * The current page is rendered as a <span>; other pages are <a> tags.
  * Returns the link for currentPage + 1, or null if we're on the last page.
  */
-async function getNextPageLink(
-  page: puppeteer.Page,
-  currentPage: number,
-): Promise<puppeteer.ElementHandle | null> {
+async function getNextPageLink(page: Page, currentPage: number): Promise<ElementHandle | null> {
   const pagingRow = await page.$(pagingRowSelector);
   if (!pagingRow) return null;
 
@@ -74,7 +71,7 @@ async function getNextPageLink(
  * Find the PortalID for a project by name, checking cache and paginating through pages as needed.
  */
 export async function getPortalIdByProjectName(
-  page: puppeteer.Page,
+  page: Page,
   env: Environment,
   projectName: string,
 ): Promise<string> {
@@ -101,7 +98,7 @@ export async function getPortalIdByProjectName(
     if (!nextLink) break;
 
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => null),
       nextLink.click(),
     ]);
     currentPage++;

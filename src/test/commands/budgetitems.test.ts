@@ -56,31 +56,25 @@ describe('Budgetitems Commands (src/commands/budgetitems/)', () => {
       const outputCsvPath = path.join(tmpDir, 'results.csv');
       fs.writeFileSync(csvPath, 'Project ID,Item ID\nP-100,I-200\n', 'utf8');
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => ({ click: async () => {} }),
-          }),
-          setCookie: async () => {},
-          cookies: async () => [{ name: 'sid', value: '1' }],
+      const mockContext = {
+        addCookies: async () => {},
+        cookies: async () => [{ name: 'sid', value: '1' }],
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForNavigation: async () => {},
+          waitForSelector: async () => ({ click: async () => {} }),
+          $: async () => ({ click: async () => {} }),
           close: async () => {},
         }),
-        defaultBrowserContext: () => ({
-          setCookie: async () => {},
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForNavigation: async () => {},
-            waitForSelector: async () => ({ click: async () => {} }),
-            $: async () => ({ click: async () => {} }),
-            close: async () => {},
-          }),
-        }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
@@ -126,35 +120,29 @@ describe('Budgetitems Commands (src/commands/budgetitems/)', () => {
         'utf8',
       );
 
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => ({}),
+      const mockContext = {
+        addCookies: async () => {},
+        cookies: async () => [{ name: 'sid', value: '1' }],
+        close: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForNavigation: async () => {},
+          waitForSelector: async () => ({
+            click: async () => {},
+            evaluate: async () => false,
           }),
-          setCookie: async () => {},
-          cookies: async () => [{ name: 'sid', value: '1' }],
+          $: async () => ({ click: async () => {} }),
+          $eval: async () => {},
           close: async () => {},
         }),
-        defaultBrowserContext: () => ({
-          setCookie: async () => {},
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForNavigation: async () => {},
-            waitForSelector: async () => ({
-              click: async () => {},
-              getProperty: async () => ({ jsonValue: async () => false }),
-            }),
-            $: async () => ({ click: async () => {} }),
-            $eval: async () => {},
-            close: async () => {},
-          }),
-        }),
+      };
+
+      const mockBrowser: any = {
+        isConnected: () => true,
+        contexts: () => [mockContext],
+        newContext: async () => mockContext,
       };
 
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;

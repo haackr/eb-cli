@@ -1,5 +1,12 @@
-import puppeteer from 'puppeteer';
-import { BrowserManager, Environment, baseurl, optimizePageForAutomation } from './index.js';
+import { type Browser, type Page } from 'playwright';
+import {
+  BrowserManager,
+  Environment,
+  baseurl,
+  optimizePageForAutomation,
+  normalizeCookies,
+  type Cookie,
+} from './index.js';
 
 export type ApiLogSummary = {
   page: number;
@@ -34,8 +41,8 @@ export type ApiLogRecord = {
 
 export type DownloadApiLogsArgs = {
   env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser;
+  cookies: Cookie[];
+  browser?: Browser;
   pages: number;
   onPageStart?: (page: number) => void | Promise<void>;
   onRecord?: (record: ApiLogRecord) => void | Promise<void>;
@@ -69,7 +76,7 @@ function isDetachedFrameError(error: unknown): boolean {
 }
 
 export async function extractSummariesForCurrentPage(
-  page: puppeteer.Page,
+  page: Page,
   pageNumber: number,
 ): Promise<ApiLogSummary[]> {
   return await page
@@ -110,11 +117,11 @@ export async function extractSummariesForCurrentPage(
 }
 
 async function openDetailAndRead(
-  page: puppeteer.Page,
+  page: Page,
   detailsId: string,
   expectedSupportId: string,
 ): Promise<ApiLogDetail> {
-  const readDetailFromPage = async (detailPage: puppeteer.Page): Promise<ApiLogDetail> => {
+  const readDetailFromPage = async (detailPage: Page): Promise<ApiLogDetail> => {
     await detailPage.waitForFunction(
       (expectedId) => {
         const supportIdInput = document.querySelector(
@@ -127,8 +134,8 @@ async function openDetailAndRead(
 
         return supportIdInput.value.trim() === expectedId;
       },
-      { timeout: 20_000 },
       expectedSupportId,
+      { timeout: 20_000 },
     );
 
     return await detailPage.evaluate(() => {
@@ -192,7 +199,7 @@ async function openDetailAndRead(
   }, detailsId);
 
   if (detailUrlFromWindowOpen) {
-    const detailPage = await page.browserContext().newPage();
+    const detailPage = await page.context().newPage();
 
     try {
       const detailUrl = new URL(detailUrlFromWindowOpen, page.url()).toString();
@@ -203,16 +210,7 @@ async function openDetailAndRead(
     }
   }
 
-  const browser = page.browser();
-  const popupTargetPromise = browser
-    .waitForTarget(
-      (target) =>
-        target.type() === 'page' &&
-        target.opener() === page.target() &&
-        target.url() !== 'about:blank',
-      { timeout: 7_000 },
-    )
-    .catch(() => null);
+  const popupPromise = page.waitForEvent('popup', { timeout: 7_000 }).catch(() => null);
 
   await page.evaluate((logId) => {
     const windowAny = window as unknown as { openLogDetails?: (id: string) => void };
@@ -223,13 +221,12 @@ async function openDetailAndRead(
     windowAny.openLogDetails(logId);
   }, detailsId);
 
-  const popupTarget = await popupTargetPromise;
-  const popupPage = popupTarget ? await popupTarget.page() : null;
+  const popupPage = await popupPromise;
 
   if (popupPage) {
     try {
       await popupPage
-        .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 })
+        .waitForLoadState('domcontentloaded', { timeout: 20_000 })
         .catch(() => undefined);
       return await readDetailFromPage(popupPage);
     } finally {
@@ -253,7 +250,7 @@ async function openDetailAndRead(
   throw new Error(`Unable to read detail for id ${detailsId}`);
 }
 
-async function navigateToPage(page: puppeteer.Page, targetPage: number): Promise<void> {
+async function navigateToPage(page: Page, targetPage: number): Promise<void> {
   const previousFirstSupportId = await page.$eval(
     `${dataRowSelector}:first-child td:nth-child(2)`,
     (el) => el.textContent?.trim() || '',
@@ -277,14 +274,14 @@ async function navigateToPage(page: puppeteer.Page, targetPage: number): Promise
   }, targetPage);
 
   await Promise.race([
-    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }),
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => null),
     page.waitForFunction(
       (requestedPage) => {
         const currentPage = document.querySelector('tr.Paging span')?.textContent?.trim();
         return currentPage === String(requestedPage);
       },
-      { timeout: 20_000 },
       targetPage,
+      { timeout: 20_000 },
     ),
   ]);
 
@@ -298,8 +295,8 @@ async function navigateToPage(page: puppeteer.Page, targetPage: number): Promise
 
       return Boolean(firstSupportId) && firstSupportId !== previousSupportId;
     },
-    { timeout: 20_000 },
     previousFirstSupportId,
+    { timeout: 20_000 },
   );
 }
 
@@ -314,19 +311,20 @@ export async function downloadApiLogs(
 
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
-  let page: puppeteer.Page | null = null;
+  let page: Page | null = null;
 
   try {
-    if (!browserInstance.connected) {
+    if (!browserInstance.isConnected()) {
       throw new Error('Browser is not connected');
     }
 
-    const context = browserInstance.defaultBrowserContext();
-    await context.setCookie(...cookies);
+    const context =
+      (await BrowserManager.getInstance().getDefaultContext(browserInstance)) ||
+      (await browserInstance.newContext());
+    await context.addCookies(normalizeCookies(cookies));
 
     page = await context.newPage();
     await optimizePageForAutomation(page);
-    await context.setCookie(...cookies);
 
     const url = `https://${env}.${baseurl}/da2/Setup/Admin/APILogs.aspx`;
     await page.goto(url, { waitUntil: 'domcontentloaded' });

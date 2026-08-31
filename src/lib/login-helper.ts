@@ -89,9 +89,11 @@ export async function promptLoginAndSaveSession(options: LoginOptions = {}): Pro
         pass,
         options.account,
         async (accounts: Account[]) => {
+          spinner.stop();
           const selectedAccount = await accountSpecifier(accounts);
           options.account = selectedAccount.text;
-          return selectedAccount.value;
+          spinner.start('Logging in to selected account...');
+          return selectedAccount;
         },
         undefined,
         (selectedAccount: Account) => {
@@ -124,6 +126,12 @@ export async function promptLoginAndSaveSession(options: LoginOptions = {}): Pro
 }
 
 async function accountSpecifier(accounts: eb.Account[]): Promise<Account> {
+  if (!accounts || accounts.length === 0) {
+    throw new Error('No accounts available to select');
+  }
+  if (accounts.length === 1 && accounts[0]) {
+    return accounts[0];
+  }
   const selectedAccount = await select({
     message: 'Select an account:',
     choices: accounts.map((account) => ({

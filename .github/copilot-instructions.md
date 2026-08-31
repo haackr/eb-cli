@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This Oclif v4 CLI automates e-Builder administration with Puppeteer. It persists authenticated browser cookies locally so commands can reuse, validate, and refresh e-Builder sessions.
+This Oclif v4 CLI automates e-Builder administration with Playwright. It persists authenticated browser cookies locally so commands can reuse, validate, and refresh e-Builder sessions.
 
 ## Build, Lint, and Test
 
@@ -11,13 +11,13 @@ This Oclif v4 CLI automates e-Builder administration with Puppeteer. It persists
 - `npm run lint` runs ESLint on all TypeScript under `src/`; target one file with `npx eslint src/commands/login.ts`.
 - `npm run format:check` checks formatting; `npm run format` writes formatting.
 - Run source commands with `npm run dev -- <command>`, for example `npm run dev -- session list`. The production runner (`bin/run.js`) executes compiled commands from `dist/`.
-- No test runner or test files are configured. `npm test` intentionally exits with an error, so there is no full-suite or single-test command.
+- Run test suite with `npm test`.
 
 ## Architecture
 
 - Oclif discovers commands from the filesystem: `src/commands/<topic>/<command>.ts` becomes `eb <topic> <command>` after compilation. Commands define Oclif metadata and parse arguments/flags in `run()`.
 - Browser-facing behavior lives in `src/lib/eb-puppetmaster/`. Its `index.ts` is the public barrel and centralizes e-Builder environment conversion (`us1` through `ca` <-> host subdomains). Command code should call its exported operations rather than construct URLs or duplicate environment maps.
-- `BrowserManager` owns the process-wide Puppeteer instance, browser mode, lifecycle handlers, and Chrome bootstrap. Reuse it for a command and close it when work completes.
+- `BrowserManager` owns the process-wide Playwright Chromium instance, browser mode, lifecycle handlers, and Chrome bootstrap. Reuse it for a command and close it when work completes.
 - `src/lib/db.ts` stores `SessionRow` records in `~/.eb-cli/eb.db`, not in the repository. Session cookies are serialized JSON and must be read/updated through the database helpers.
 - `BaseSessionCommand` connects session selection, login fallback, cookie validation, and refresh. Browser-backed commands should extend it, resolve the session with `getSession(flags)`, and fetch cookies with `getSessionCookies(session.id, headless)`.
 
@@ -29,11 +29,11 @@ This Oclif v4 CLI automates e-Builder administration with Puppeteer. It persists
 
 ## Browser and Batch-Operation Conventions
 
-- Pass `!flags['show-browser']` as the headless setting and reuse one `BrowserManager` browser across a batch. Puppeteer selectors may cross e-Builder shadow DOM with `>>>`.
+- Pass `!flags['show-browser']` as the headless setting and reuse one `BrowserManager` browser across a batch.
 - Authenticate via `promptLoginAndSaveSession`/`eb.login`; validate or refresh stored cookies before operations. Long-running batch commands refresh cookies every ten items.
 - Batch commands support `--dry-run`, `--verbose`, optional result CSVs, and `--json`. Preserve this contract: collect per-item success/failure results, keep partial output on `SIGINT`/`SIGTERM`, suppress spinners/progress for JSON, and always close the browser on completion or failure.
 - Implement low-level automation functions in `eb-puppetmaster` with typed option/result objects. They receive an environment, cookies, and an optional shared browser; commands own CSV parsing, progress, result aggregation, and presentation.
-- Browser launch retries after installing Chrome. On Linux, system dependencies are installed automatically only as root or when `EB_PUPPETEER_INSTALL_DEPS=1`; otherwise users must install missing Chrome libraries themselves.
+- Playwright Chromium is used for browser automation and handles cross-platform browser dependencies seamlessly across macOS, Windows, and Linux distributions (including Arch Linux).
 
 ## Release Integration
 

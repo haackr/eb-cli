@@ -44,8 +44,9 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
       );
 
       const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
+        isConnected: () => true,
+        contexts: () => [],
+        newContext: async () => ({
           newPage: async () => ({
             setDefaultNavigationTimeout: () => {},
             setDefaultTimeout: () => {},
@@ -55,7 +56,7 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
               throw new Error('Not found');
             },
           }),
-          setCookie: async () => {},
+          addCookies: async () => {},
           cookies: async () => [{ name: 'new', value: '2' }],
           close: async () => {},
         }),
@@ -75,8 +76,9 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
       db.addSession('invalid@example.com', 'us1', 'Acct1', '[]');
 
       const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
+        isConnected: () => true,
+        contexts: () => [],
+        newContext: async () => ({
           newPage: async () => ({
             setDefaultNavigationTimeout: () => {},
             setDefaultTimeout: () => {},
@@ -85,7 +87,7 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
               throw new Error('Timeout selector not found');
             },
           }),
-          setCookie: async () => {},
+          addCookies: async () => {},
           cookies: async () => [],
           close: async () => {},
         }),
