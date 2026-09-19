@@ -11,6 +11,7 @@ const passwordSelector = '#txtPassword >>> #mwc_id_1_text_input';
 const signInButtonSelector = '#signIn >>> button';
 const selectAccountSelector = '#selectAccount >>> select';
 const selectAccountContinueButtonSelector = '#selectAccountContinueBtn >>> button';
+const myHomeTabSelector = '#ctl00_ucTopNav2_tabHomeLink';
 const errorMessageSelector = '#errorMessage';
 const changePasswordUrl = '/auth/Authenticate/LoginSequence.aspx';
 const trimbleUsernameSelector = '#username-field';
@@ -478,13 +479,21 @@ export async function isLoggedIn(
   });
 
   try {
-    await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
-    loggedIn = await isEBuilderPageAuthenticated(page, env);
-    if (loggedIn) {
-      newCookies = await context.cookies();
-    }
+    await page.waitForSelector(myHomeTabSelector, {
+      timeout: 5000,
+    });
+    loggedIn = true;
+    newCookies = await context.cookies();
   } catch {
-    loggedIn = false;
+    try {
+      await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
+      loggedIn = await isEBuilderPageAuthenticated(page, env);
+      if (loggedIn) {
+        newCookies = await context.cookies();
+      }
+    } catch {
+      loggedIn = false;
+    }
   }
 
   // Close the context to clean up
