@@ -12,8 +12,8 @@ export type RemoveUserFromProjectRoleArgs = {
   dryRun: boolean;
 };
 
-async function findRemoveButton(
-  userFrame: puppeteer.Frame,
+export async function findRemoveButton(
+  userFrame: puppeteer.Frame | puppeteer.Page,
 ): Promise<puppeteer.ElementHandle | null> {
   const selectors = [
     '#btnRoleRemove',
@@ -42,12 +42,31 @@ async function findRemoveButton(
   return null;
 }
 
-async function selectMatchingUsersOnCurrentPage(
-  userFrame: puppeteer.Frame,
+export async function selectMatchingUsersOnCurrentPage(
+  userFrame: puppeteer.Frame | puppeteer.Page,
   requestedKeys: string[],
 ): Promise<string[]> {
   return await userFrame.evaluate((keys: string[]) => {
-    const requested = new Set(keys.map((k) => k.toLowerCase().trim()));
+    function normalizeName(name: string): string {
+      const trimmed = name.trim().toLowerCase();
+      if (trimmed.includes(',')) {
+        const parts = trimmed
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean);
+        if (parts.length === 2 && parts[0] && parts[1]) {
+          return `${parts[1]} ${parts[0]}`;
+        }
+      } else if (trimmed.includes(' ')) {
+        const parts = trimmed.split(/\s+/).filter(Boolean);
+        if (parts.length === 2 && parts[0] && parts[1]) {
+          return `${parts[1]}, ${parts[0]}`;
+        }
+      }
+      return '';
+    }
+
+    const remaining = new Set(keys.map((k) => k.toLowerCase().trim()).filter(Boolean));
     const matched: string[] = [];
     const rows = Array.from(
       document.querySelectorAll('#grdResults tr.RowData, #grdResults tr.AltRowData'),
@@ -57,43 +76,65 @@ async function selectMatchingUsersOnCurrentPage(
       const checkbox = row.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
       if (!checkbox) continue;
 
-      const cellTexts = Array.from(row.querySelectorAll('td')).map((c) =>
-        (c.textContent ?? '').toLowerCase().trim(),
-      );
+      const cellTexts = Array.from(row.querySelectorAll('td'))
+        .map((c) => (c.textContent ?? '').toLowerCase().trim())
+        .filter(Boolean);
+
+      const rowIdentifiers = new Set<string>();
+      for (const text of cellTexts) {
+        rowIdentifiers.add(text);
+        const norm = normalizeName(text);
+        if (norm) rowIdentifiers.add(norm);
+        if (text.includes('@')) {
+          const prefix = text.split('@')[0]?.trim();
+          if (prefix) rowIdentifiers.add(prefix);
+        }
+      }
+
       const dataAttrs = [
-        checkbox.value,
         checkbox.getAttribute('data-username'),
         checkbox.getAttribute('data-name'),
         checkbox.getAttribute('data-userid'),
-      ]
-        .filter(Boolean)
-        .map((a) => a!.toLowerCase().trim());
+      ];
+      for (const attr of dataAttrs) {
+        if (attr) {
+          const text = attr.trim().toLowerCase();
+          if (text) rowIdentifiers.add(text);
+        }
+      }
 
-      const rowIdentifiers = new Set([...cellTexts, ...dataAttrs]);
+      if (
+        checkbox.value &&
+        !['on', 'true', 'false'].includes(checkbox.value.toLowerCase()) &&
+        !checkbox.value.startsWith('ctl00')
+      ) {
+        const val = checkbox.value.trim().toLowerCase();
+        if (val) rowIdentifiers.add(val);
+      }
 
       let matchedKey: string | undefined;
-      for (const req of requested) {
-        if (rowIdentifiers.has(req)) {
+      for (const req of remaining) {
+        const reqInverted = normalizeName(req);
+        const reqPrefix = req.includes('@') ? (req.split('@')[0]?.trim() ?? '') : '';
+
+        if (
+          rowIdentifiers.has(req) ||
+          (reqInverted && rowIdentifiers.has(reqInverted)) ||
+          (reqPrefix && rowIdentifiers.has(reqPrefix))
+        ) {
           matchedKey = req;
           break;
         }
-        for (const id of rowIdentifiers) {
-          if (id.includes(req) || req.includes(id)) {
-            matchedKey = req;
-            break;
-          }
-        }
-        if (matchedKey) break;
       }
 
       if (matchedKey) {
         if (!checkbox.checked) {
           checkbox.click();
-          checkbox.checked = true;
-          checkbox.dispatchEvent(new Event('click', { bubbles: true }));
-          checkbox.dispatchEvent(new Event('change', { bubbles: true }));
         }
-        matched.push(matchedKey);
+        if (checkbox.checked) {
+          matched.push(matchedKey);
+          remaining.delete(matchedKey);
+        }
       }
     }
 
@@ -166,22 +207,28 @@ export async function removeUserFromProjectRoleByName(
       roleLink.click(),
     ]);
 
-    // 4. Get the user list iframe
-    const userListFrameEl = await page.waitForSelector(
-      'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList, iframe[name*="userList"]',
-      { timeout: 30_000 },
-    );
-    if (!userListFrameEl) throw new Error('User list iframe not found');
-    const userFrame = await userListFrameEl.contentFrame();
-    if (!userFrame) throw new Error('Could not access user list iframe content');
+    // 4. Helper to get the user list iframe
+    async function getUserFrame(): Promise<puppeteer.Frame> {
+      const userListFrameEl = await page!.waitForSelector(
+        'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList, iframe[name*="userList"]',
+        { timeout: 30_000 },
+      );
+      if (!userListFrameEl) throw new Error('User list iframe not found');
+      const userFrame = await userListFrameEl.contentFrame();
+      if (!userFrame) throw new Error('Could not access user list iframe content');
+      return userFrame;
+    }
 
+    let userFrame = await getUserFrame();
     await userFrame.waitForSelector('#grdResults, table', { timeout: 30_000 });
 
     // 5. Match and select users across all grid pages
     const requestedByKey = new Map<string, string>();
     for (const userName of userNames) {
       const key = userName.trim().toLowerCase();
-      if (!requestedByKey.has(key)) requestedByKey.set(key, userName);
+      if (key && !requestedByKey.has(key)) {
+        requestedByKey.set(key, userName);
+      }
     }
 
     const matchedKeys = new Set<string>();
@@ -189,9 +236,33 @@ export async function removeUserFromProjectRoleByName(
       Array.from(requestedByKey.keys()).filter((k) => !matchedKeys.has(k));
 
     while (true) {
+      userFrame = await getUserFrame();
       const currentMatched = await selectMatchingUsersOnCurrentPage(userFrame, remainingKeys());
-      for (const k of currentMatched) {
-        matchedKeys.add(k);
+      if (currentMatched.length > 0) {
+        for (const k of currentMatched) {
+          matchedKeys.add(k);
+        }
+
+        if (!dryRun) {
+          const removeBtn = await findRemoveButton(userFrame);
+          if (!removeBtn) {
+            throw new Error('Remove button not found in user list iframe');
+          }
+
+          await Promise.all([
+            page.waitForNetworkIdle({ idleTime: 500, timeout: 20_000 }).catch(() => null),
+            removeBtn.click(),
+          ]);
+
+          userFrame = await getUserFrame();
+          await userFrame
+            .waitForSelector('#grdResults, table', { timeout: 20_000 })
+            .catch(() => null);
+
+          if (remainingKeys().length > 0) {
+            continue;
+          }
+        }
       }
 
       if (remainingKeys().length === 0) {
@@ -225,22 +296,8 @@ export async function removeUserFromProjectRoleByName(
         (nextLinkEl as puppeteer.ElementHandle<HTMLElement>).click(),
       ]);
 
+      userFrame = await getUserFrame();
       await userFrame.waitForSelector('#grdResults, table', { timeout: 15_000 });
-    }
-
-    // 6. Click remove once for all selected users (if not dry-run) and accept confirmation.
-    if (!dryRun && matchedKeys.size > 0) {
-      const removeBtn = await findRemoveButton(userFrame);
-      if (!removeBtn) {
-        throw new Error('Remove button not found in user list iframe');
-      }
-
-      await Promise.all([
-        page.waitForNetworkIdle({ idleTime: 500, timeout: 20_000 }).catch(() => null),
-        removeBtn.click(),
-      ]);
-
-      await userFrame.waitForSelector('#grdResults, table', { timeout: 20_000 }).catch(() => null);
     }
 
     const notFound: string[] = [];

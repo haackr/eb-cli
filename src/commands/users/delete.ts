@@ -5,6 +5,7 @@ import ora from 'ora';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
+import { parseCsv, USER_DELETE_ALIASES } from '../../lib/csv.js';
 
 type UserDeleteCsvRow = {
   userName?: string;
@@ -62,12 +63,12 @@ export default class UsersDelete extends BaseSessionCommand {
     const session = await this.getSession(flags);
 
     const csvData = fs.readFileSync(args.file, 'utf8');
-    const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
+    const parsed = parseCsv<UserDeleteCsvRow>(csvData, USER_DELETE_ALIASES);
     if (parsed.errors.length > 0) {
       this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
     }
 
-    const users = (parsed.data as UserDeleteCsvRow[]).filter((u) => Boolean(u.userName));
+    const users = parsed.data.filter((u) => Boolean(u.userName));
     if (users.length === 0) {
       this.error('No users found in CSV. Expected columns include userId, userName, or email.');
     }
@@ -79,6 +80,10 @@ export default class UsersDelete extends BaseSessionCommand {
       !flags['show-browser'],
       !flags['show-browser'] ? ['--window-size=1200,800'] : undefined,
     );
+    const context = browser.defaultBrowserContext();
+    await context.setCookie(...cookies);
+    const page = await context.newPage();
+    await eb.optimizePageForAutomation(page, { blockAssets: !flags['show-browser'] });
 
     const results: UserDeleteResult[] = [];
     let deletedCount = 0;
@@ -129,6 +134,7 @@ export default class UsersDelete extends BaseSessionCommand {
         }
 
         try {
+          await page.close().catch(() => {});
           await eb.BrowserManager.getInstance().closeBrowser();
         } catch {}
 
@@ -173,62 +179,68 @@ export default class UsersDelete extends BaseSessionCommand {
       } catch {}
     });
 
-    for (const user of users) {
-      if (shouldStop) break;
+    try {
+      for (const user of users) {
+        if (shouldStop) break;
 
-      if (refreshCounter % 10 === 0) {
-        cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
-      }
-
-      const displayId = user.userName || 'unknown-user';
-      const spinner =
-        flags.verbose && !this.jsonEnabled() ? ora(`Deleting user ${displayId}`).start() : null;
-      currentSpinner = spinner;
-
-      try {
-        await eb.deleteUser({
-          env,
-          cookies,
-          browser,
-          user,
-          dryRun: flags['dry-run'],
-        });
-
-        if (spinner) {
-          spinner.succeed(`Deleted user ${displayId}`);
+        if (refreshCounter % 10 === 0) {
+          cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
+          await context.setCookie(...cookies);
         }
 
-        results.push({
-          status: 'success',
-          ...(user.userName ? { userName: user.userName } : {}),
-        });
-        deletedCount++;
-      } catch (error: unknown) {
-        const message = toErrorMessage(error);
-        if (spinner) {
-          spinner.fail(`Failed to delete user ${displayId}: ${message}`);
+        const displayId = user.userName || 'unknown-user';
+        const spinner =
+          flags.verbose && !this.jsonEnabled() ? ora(`Deleting user ${displayId}`).start() : null;
+        currentSpinner = spinner;
+
+        try {
+          await eb.deleteUser({
+            env,
+            cookies,
+            browser,
+            page,
+            user,
+            dryRun: flags['dry-run'],
+          });
+
+          if (spinner) {
+            spinner.succeed(`Deleted user ${displayId}`);
+          }
+
+          results.push({
+            status: 'success',
+            ...(user.userName ? { userName: user.userName } : {}),
+          });
+          deletedCount++;
+        } catch (error: unknown) {
+          const message = toErrorMessage(error);
+          if (spinner) {
+            spinner.fail(`Failed to delete user ${displayId}: ${message}`);
+          }
+
+          results.push({
+            status: 'failed',
+            ...(user.userName ? { userName: user.userName } : {}),
+            message,
+          });
+          failedCount++;
         }
 
-        results.push({
-          status: 'failed',
-          ...(user.userName ? { userName: user.userName } : {}),
-          message,
-        });
-        failedCount++;
+        currentSpinner = null;
+        if (progressBar) {
+          progressBar.update(refreshCounter + 1, { success: deletedCount, failed: failedCount });
+        }
+        refreshCounter++;
       }
-
-      currentSpinner = null;
+    } finally {
       if (progressBar) {
-        progressBar.update(refreshCounter + 1, { success: deletedCount, failed: failedCount });
+        progressBar.stop();
       }
-      refreshCounter++;
+      try {
+        await page.close().catch(() => {});
+      } catch {}
+      await eb.BrowserManager.getInstance().closeBrowser();
     }
-
-    if (progressBar) {
-      progressBar.stop();
-    }
-
-    await eb.BrowserManager.getInstance().closeBrowser();
 
     if (flags['output-csv']) {
       writeResultsCsv();

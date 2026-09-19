@@ -5,6 +5,7 @@ import ora from 'ora';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
+import { parseCsv, USER_SET_FIELD_ALIASES } from '../../lib/csv.js';
 
 type UserSetFieldCsvRow = Record<string, string | boolean | null | undefined>;
 
@@ -23,8 +24,6 @@ type UserSetFieldResult = {
   message?: string;
 };
 
-const userIdAliases = new Set(['userid', 'user_id', 'userid', 'id']);
-
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -37,17 +36,14 @@ function parseOperations(rows: UserSetFieldCsvRow[]): UserSetFieldOperation[] {
   const operations: UserSetFieldOperation[] = [];
 
   for (const row of rows) {
-    const entries = Object.entries(row);
-    const userIdEntry = entries.find(([key]) => userIdAliases.has(key.trim().toLowerCase()));
-    const userId = String(userIdEntry?.[1] ?? '').trim();
+    const userId = String(row['userId'] ?? '').trim();
     if (!userId) {
       continue;
     }
 
     const fieldValues: eb.UserFieldValueMap = {};
-    for (const [key, value] of entries) {
-      const trimmedKey = key.trim();
-      if (!trimmedKey || userIdAliases.has(trimmedKey.toLowerCase())) {
+    for (const [key, value] of Object.entries(row)) {
+      if (key === 'userId') {
         continue;
       }
 
@@ -56,7 +52,7 @@ function parseOperations(rows: UserSetFieldCsvRow[]): UserSetFieldOperation[] {
         continue;
       }
 
-      fieldValues[trimmedKey] = trimmedValue;
+      fieldValues[key] = trimmedValue;
     }
 
     if (Object.keys(fieldValues).length === 0) {
@@ -108,12 +104,12 @@ export default class UserSetField extends BaseSessionCommand {
     const { args, flags } = await this.parse(UserSetField);
 
     const csvData = fs.readFileSync(args.file, 'utf8');
-    const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
+    const parsed = parseCsv<UserSetFieldCsvRow>(csvData, USER_SET_FIELD_ALIASES);
     if (parsed.errors.length > 0) {
       this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
     }
 
-    const operations = parseOperations(parsed.data as UserSetFieldCsvRow[]);
+    const operations = parseOperations(parsed.data);
     if (operations.length === 0) {
       this.error(
         'No valid rows found. CSV must include a userId column and at least one non-empty field value column per row.',
@@ -128,6 +124,10 @@ export default class UserSetField extends BaseSessionCommand {
       !flags['show-browser'],
       !flags['show-browser'] ? ['--window-size=1200,800'] : undefined,
     );
+    const context = browser.defaultBrowserContext();
+    await context.setCookie(...cookies);
+    const page = await context.newPage();
+    await eb.optimizePageForAutomation(page, { blockAssets: !flags['show-browser'] });
 
     const results: UserSetFieldResult[] = [];
     let updatedCount = 0;
@@ -182,6 +182,7 @@ export default class UserSetField extends BaseSessionCommand {
         }
 
         try {
+          await page.close().catch(() => {});
           await eb.BrowserManager.getInstance().closeBrowser();
         } catch {}
 
@@ -226,76 +227,82 @@ export default class UserSetField extends BaseSessionCommand {
       } catch {}
     });
 
-    for (const operation of operations) {
-      if (shouldStop) break;
+    try {
+      for (const operation of operations) {
+        if (shouldStop) break;
 
-      if (refreshCounter % 10 === 0) {
-        cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
-      }
-
-      const requestedFields = Object.keys(operation.fieldValues);
-      const spinner =
-        flags.verbose && !this.jsonEnabled()
-          ? ora(`Setting fields for user ${operation.userId}`).start()
-          : null;
-      currentSpinner = spinner;
-
-      try {
-        const updateResult = await eb.setUserFields({
-          env,
-          cookies,
-          browser,
-          userId: operation.userId,
-          fieldValues: operation.fieldValues,
-          dryRun: flags['dry-run'],
-        });
-
-        if (spinner) {
-          spinner.succeed(
-            `Processed user ${operation.userId}. Updated ${updateResult.updatedFields.length}, not found ${updateResult.notFoundFields.length}`,
-          );
+        if (refreshCounter % 10 === 0) {
+          cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
+          await context.setCookie(...cookies);
         }
 
-        results.push({
-          userId: operation.userId,
-          status: 'success',
-          requestedFields,
-          updatedFields: updateResult.updatedFields,
-          notFoundFields: updateResult.notFoundFields,
-          visitedUrl: updateResult.visitedUrl,
-          ...(updateResult.notFoundFields.length > 0
-            ? { message: `Fields not found: ${updateResult.notFoundFields.join(', ')}` }
-            : {}),
-        });
-        updatedCount++;
-      } catch (error: unknown) {
-        const message = toErrorMessage(error);
-        if (spinner) {
-          spinner.fail(`Failed user ${operation.userId}: ${message}`);
+        const requestedFields = Object.keys(operation.fieldValues);
+        const spinner =
+          flags.verbose && !this.jsonEnabled()
+            ? ora(`Setting fields for user ${operation.userId}`).start()
+            : null;
+        currentSpinner = spinner;
+
+        try {
+          const updateResult = await eb.setUserFields({
+            env,
+            cookies,
+            browser,
+            page,
+            userId: operation.userId,
+            fieldValues: operation.fieldValues,
+            dryRun: flags['dry-run'],
+          });
+
+          if (spinner) {
+            spinner.succeed(
+              `Processed user ${operation.userId}. Updated ${updateResult.updatedFields.length}, not found ${updateResult.notFoundFields.length}`,
+            );
+          }
+
+          results.push({
+            userId: operation.userId,
+            status: 'success',
+            requestedFields,
+            updatedFields: updateResult.updatedFields,
+            notFoundFields: updateResult.notFoundFields,
+            visitedUrl: updateResult.visitedUrl,
+            ...(updateResult.notFoundFields.length > 0
+              ? { message: `Fields not found: ${updateResult.notFoundFields.join(', ')}` }
+              : {}),
+          });
+          updatedCount++;
+        } catch (error: unknown) {
+          const message = toErrorMessage(error);
+          if (spinner) {
+            spinner.fail(`Failed user ${operation.userId}: ${message}`);
+          }
+
+          results.push({
+            userId: operation.userId,
+            status: 'failed',
+            requestedFields,
+            message,
+          });
+          failedCount++;
         }
 
-        results.push({
-          userId: operation.userId,
-          status: 'failed',
-          requestedFields,
-          message,
-        });
-        failedCount++;
-      }
+        currentSpinner = null;
+        if (progressBar) {
+          progressBar.update(refreshCounter + 1, { success: updatedCount, failed: failedCount });
+        }
 
-      currentSpinner = null;
+        refreshCounter++;
+      }
+    } finally {
       if (progressBar) {
-        progressBar.update(refreshCounter + 1, { success: updatedCount, failed: failedCount });
+        progressBar.stop();
       }
-
-      refreshCounter++;
+      try {
+        await page.close().catch(() => {});
+      } catch {}
+      await eb.BrowserManager.getInstance().closeBrowser();
     }
-
-    if (progressBar) {
-      progressBar.stop();
-    }
-
-    await eb.BrowserManager.getInstance().closeBrowser();
 
     if (flags['output-csv']) {
       writeResultsCsv();

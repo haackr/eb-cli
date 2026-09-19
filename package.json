@@ -1,13 +1,14 @@
 {
   "name": "eb-cli",
-  "version": "0.1.0-alpha.36",
+  "version": "0.1.0-alpha.43",
   "description": "",
   "main": "index.js",
   "scripts": {
     "dev": "./bin/dev.js",
     "build": "tsc",
     "clean": "rm -rf dist",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run build && node --test --test-concurrency=1 \"dist/test/*.test.js\" \"dist/test/*/*.test.js\"",
+    "test:coverage": "npm run build && node --test --experimental-test-coverage --test-concurrency=1 \"dist/test/*.test.js\" \"dist/test/*/*.test.js\"",
     "lint": "eslint --ext .ts src",
     "lint:fix": "eslint --ext .ts src --fix",
     "format": "prettier --write .",
@@ -97,7 +98,8 @@
     "typescript-eslint": "^8.50.1"
   },
   "simple-git-hooks": {
-    "pre-commit": "npm exec lint-staged"
+    "pre-commit": "npm exec lint-staged",
+    "pre-push": "npm test"
   },
   "lint-staged": {
     "**/*.ts": [

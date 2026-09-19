@@ -5,15 +5,11 @@ import ora from 'ora';
 import cliProgress from 'cli-progress';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
+import { parseCsv, USER_SET_SSO_ALIASES } from '../../lib/csv.js';
 
 type UserSetSsoCsvRow = {
   userId?: string;
-  userid?: string;
-  user_id?: string;
-  id?: string;
   sso?: string | boolean;
-  ssoEnabled?: string | boolean;
-  sso_enabled?: string | boolean;
 };
 
 type UserSetSsoOperation = {
@@ -64,8 +60,8 @@ function parseOperations(rows: UserSetSsoCsvRow[]): UserSetSsoOperation[] {
   const operations: UserSetSsoOperation[] = [];
 
   for (const row of rows) {
-    const userId = String(row.userId ?? row.userid ?? row.user_id ?? row.id ?? '').trim();
-    const enabled = parseBooleanLike(row.sso ?? row.ssoEnabled ?? row.sso_enabled);
+    const userId = String(row.userId ?? '').trim();
+    const enabled = parseBooleanLike(row.sso);
     if (!userId || enabled === null) {
       continue;
     }
@@ -118,12 +114,12 @@ export default class UserSetSso extends BaseSessionCommand {
     const env = eb.getEnvironment(session.environment);
 
     const csvData = fs.readFileSync(args.file, 'utf8');
-    const parsed = Papa.parse(csvData, { header: true, skipEmptyLines: true });
+    const parsed = parseCsv<UserSetSsoCsvRow>(csvData, USER_SET_SSO_ALIASES);
     if (parsed.errors.length > 0) {
       this.error(`CSV parsing errors: ${parsed.errors.map((e) => e.message).join(', ')}`);
     }
 
-    const operations = parseOperations(parsed.data as UserSetSsoCsvRow[]);
+    const operations = parseOperations(parsed.data);
     if (operations.length === 0) {
       this.error(
         'No valid rows found. CSV must include userId and sso columns where sso is true/false.',
@@ -136,6 +132,10 @@ export default class UserSetSso extends BaseSessionCommand {
       !flags['show-browser'],
       !flags['show-browser'] ? ['--window-size=1200,800'] : undefined,
     );
+    const context = browser.defaultBrowserContext();
+    await context.setCookie(...cookies);
+    const page = await context.newPage();
+    await eb.optimizePageForAutomation(page, { blockAssets: !flags['show-browser'] });
 
     const results: UserSetSsoResult[] = [];
     let updatedCount = 0;
@@ -188,6 +188,7 @@ export default class UserSetSso extends BaseSessionCommand {
         }
 
         try {
+          await page.close().catch(() => {});
           await eb.BrowserManager.getInstance().closeBrowser();
         } catch {}
 
@@ -232,68 +233,74 @@ export default class UserSetSso extends BaseSessionCommand {
       } catch {}
     });
 
-    for (const operation of operations) {
-      if (shouldStop) break;
+    try {
+      for (const operation of operations) {
+        if (shouldStop) break;
 
-      if (refreshCounter % 10 === 0) {
-        cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
-      }
-
-      const spinner =
-        flags.verbose && !this.jsonEnabled()
-          ? ora(`Setting SSO for user ${operation.userId} to ${operation.enabled}`).start()
-          : null;
-      currentSpinner = spinner;
-
-      try {
-        const updateResult = await eb.setUserSso({
-          env,
-          cookies,
-          browser,
-          userId: operation.userId,
-          enabled: operation.enabled,
-          dryRun: flags['dry-run'],
-        });
-
-        if (spinner) {
-          spinner.succeed(`Updated user ${operation.userId} (sso=${operation.enabled})`);
+        if (refreshCounter % 10 === 0) {
+          cookies = await this.refreshSessionCookies(session.id, !flags['show-browser']);
+          await context.setCookie(...cookies);
         }
 
-        results.push({
-          userId: operation.userId,
-          requestedSso: operation.enabled,
-          status: 'success',
-          visitedUrl: updateResult.visitedUrl,
-        });
-        updatedCount++;
-      } catch (error: unknown) {
-        const message = toErrorMessage(error);
-        if (spinner) {
-          spinner.fail(`Failed user ${operation.userId}: ${message}`);
+        const spinner =
+          flags.verbose && !this.jsonEnabled()
+            ? ora(`Setting SSO for user ${operation.userId} to ${operation.enabled}`).start()
+            : null;
+        currentSpinner = spinner;
+
+        try {
+          const updateResult = await eb.setUserSso({
+            env,
+            cookies,
+            browser,
+            page,
+            userId: operation.userId,
+            enabled: operation.enabled,
+            dryRun: flags['dry-run'],
+          });
+
+          if (spinner) {
+            spinner.succeed(`Updated user ${operation.userId} (sso=${operation.enabled})`);
+          }
+
+          results.push({
+            userId: operation.userId,
+            requestedSso: operation.enabled,
+            status: 'success',
+            visitedUrl: updateResult.visitedUrl,
+          });
+          updatedCount++;
+        } catch (error: unknown) {
+          const message = toErrorMessage(error);
+          if (spinner) {
+            spinner.fail(`Failed user ${operation.userId}: ${message}`);
+          }
+
+          results.push({
+            userId: operation.userId,
+            requestedSso: operation.enabled,
+            status: 'failed',
+            message,
+          });
+          failedCount++;
         }
 
-        results.push({
-          userId: operation.userId,
-          requestedSso: operation.enabled,
-          status: 'failed',
-          message,
-        });
-        failedCount++;
-      }
+        currentSpinner = null;
+        if (progressBar) {
+          progressBar.update(refreshCounter + 1, { success: updatedCount, failed: failedCount });
+        }
 
-      currentSpinner = null;
+        refreshCounter++;
+      }
+    } finally {
       if (progressBar) {
-        progressBar.update(refreshCounter + 1, { success: updatedCount, failed: failedCount });
+        progressBar.stop();
       }
-
-      refreshCounter++;
+      try {
+        await page.close().catch(() => {});
+      } catch {}
+      await eb.BrowserManager.getInstance().closeBrowser();
     }
-
-    if (progressBar) {
-      progressBar.stop();
-    }
-
-    await eb.BrowserManager.getInstance().closeBrowser();
 
     if (flags['output-csv']) {
       writeResultsCsv();

@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { BrowserManager, Environment, baseurl } from './index.js';
+import { BrowserManager, Environment, baseurl, optimizePageForAutomation } from './index.js';
 
 export type ApiLogSummary = {
   page: number;
@@ -51,7 +51,7 @@ const apiLogsTableSelector =
 const dataRowSelector =
   '#ctl00_ctl00_ContentPlaceHolder1_contentSection_grdResults tr.RowData, #ctl00_ctl00_ContentPlaceHolder1_contentSection_grdResults tr.AltRowData';
 
-function parseDetailsId(onclickValue: string): string {
+export function parseDetailsId(onclickValue: string): string {
   const match = /openLogDetails\('([^']+)'\)/.exec(onclickValue);
   if (!match?.[1]) {
     throw new Error(`Unable to parse details id from onclick: ${onclickValue}`);
@@ -60,7 +60,7 @@ function parseDetailsId(onclickValue: string): string {
   return match[1];
 }
 
-function parseSuccess(input: string): boolean {
+export function parseSuccess(input: string): boolean {
   return input.trim().toLowerCase() === 'true';
 }
 
@@ -68,7 +68,7 @@ function isDetachedFrameError(error: unknown): boolean {
   return error instanceof Error && /detached frame/i.test(error.message);
 }
 
-async function extractSummariesForCurrentPage(
+export async function extractSummariesForCurrentPage(
   page: puppeteer.Page,
   pageNumber: number,
 ): Promise<ApiLogSummary[]> {
@@ -277,7 +277,7 @@ async function navigateToPage(page: puppeteer.Page, targetPage: number): Promise
   }, targetPage);
 
   await Promise.race([
-    page.waitForNavigation({ waitUntil: 'networkidle0', timeout: 20_000 }),
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }),
     page.waitForFunction(
       (requestedPage) => {
         const currentPage = document.querySelector('tr.Paging span')?.textContent?.trim();
@@ -307,11 +307,12 @@ export async function downloadApiLogs(
   options: DownloadApiLogsArgs,
 ): Promise<DownloadApiLogsResult> {
   const { env, cookies, browser, pages, onPageStart, onRecord } = options;
-  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   if (pages < 1) {
     throw new Error('pages must be at least 1');
   }
+
+  const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   let page: puppeteer.Page | null = null;
 
@@ -324,10 +325,11 @@ export async function downloadApiLogs(
     await context.setCookie(...cookies);
 
     page = await context.newPage();
+    await optimizePageForAutomation(page);
     await context.setCookie(...cookies);
 
     const url = `https://${env}.${baseurl}/da2/Setup/Admin/APILogs.aspx`;
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector(apiLogsTableSelector, { timeout: 20_000 });
 
     let recordsDownloaded = 0;

@@ -12,15 +12,46 @@ export type SessionRow = {
   created_at: string;
 };
 
-const dbDir = path.join(os.homedir(), '.eb-cli');
-const dbPath = path.join(dbDir, 'eb.db');
+let db: Database.Database;
+let insertSession: Database.Statement;
+let getAllSessions: Database.Statement;
+let getUserSessions: Database.Statement;
+let getSessionByIdStmt: Database.Statement;
+let deleteSessionId: Database.Statement;
+let deleteUserSessions: Database.Statement;
+let dbupdateSessionById: Database.Statement;
+let updateSessionCookiesStmt: Database.Statement;
 
-// Ensure the directory exists
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
+function getDbPath(): string {
+  if (process.env['EB_CLI_DB_PATH']) {
+    const customPath = process.env['EB_CLI_DB_PATH'];
+    const customDir = path.dirname(customPath);
+    if (!fs.existsSync(customDir)) {
+      fs.mkdirSync(customDir, { recursive: true });
+    }
+    return customPath;
+  }
+  const dbDir = path.join(os.homedir(), '.eb-cli');
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+  return path.join(dbDir, 'eb.db');
 }
 
-const db = Database(dbPath);
+function prepareStatements() {
+  insertSession = db.prepare(`
+    INSERT INTO sessions (username, environment, account, session_cookies) VALUES (?, ?, ?, ?)
+  `);
+  getAllSessions = db.prepare('SELECT * FROM sessions');
+  getUserSessions = db.prepare('SELECT * FROM sessions WHERE username = ?');
+  getSessionByIdStmt = db.prepare('SELECT * FROM sessions WHERE id = ?');
+  deleteSessionId = db.prepare('DELETE FROM sessions WHERE id = ?');
+  deleteUserSessions = db.prepare('DELETE FROM sessions WHERE username = ?');
+  dbupdateSessionById = db.prepare(
+    `UPDATE sessions SET username = ?, environment = ?, account = ?, session_cookies = ? WHERE id = ?`,
+  );
+  updateSessionCookiesStmt = db.prepare(`UPDATE sessions SET session_cookies = ? WHERE id = ?`);
+}
 
 export function createTables() {
   db.exec(`
@@ -34,11 +65,21 @@ export function createTables() {
     );
   `);
 }
-createTables();
 
-const insertSession = db.prepare(`
-    INSERT INTO sessions (username, environment, account, session_cookies) VALUES (?, ?, ?, ?)
-  `);
+export function initDb(customPath?: string): Database.Database {
+  if (db) {
+    try {
+      db.close();
+    } catch {}
+  }
+  const targetPath = customPath || getDbPath();
+  db = new Database(targetPath);
+  createTables();
+  prepareStatements();
+  return db;
+}
+
+initDb();
 
 export function addSession(
   username: string,
@@ -49,36 +90,28 @@ export function addSession(
   insertSession.run(username, environment, account, session_cookies);
 }
 
-const getAllSessions = db.prepare('SELECT * FROM sessions');
-export function getSessions() {
-  return getAllSessions.all();
+export function getSessions(): SessionRow[] {
+  return getAllSessions.all() as SessionRow[];
 }
 
-const getUserSessions = db.prepare('SELECT * FROM sessions WHERE username = ?');
-export function getSessionsByUsername(username: string) {
-  return getUserSessions.all(username);
+export function getSessionsByUsername(username: string): SessionRow[] {
+  return getUserSessions.all(username) as SessionRow[];
 }
 
-const getSessionByIdStmt = db.prepare('SELECT * FROM sessions WHERE id = ?');
-export function getSessionById(id: number) {
-  return getSessionByIdStmt.get(id);
+export function getSessionById(id: number): SessionRow | undefined {
+  return getSessionByIdStmt.get(id) as SessionRow | undefined;
 }
 
-const deleteSessionId = db.prepare('DELETE FROM sessions WHERE id = ?');
 export function deleteSessionById(id: number) {
   deleteSessionId.run(id);
   resetSequenceIfEmpty();
 }
 
-const deleteUserSessions = db.prepare('DELETE FROM sessions WHERE username = ?');
 export function deleteSessionsByUsername(username: string) {
   deleteUserSessions.run(username);
   resetSequenceIfEmpty();
 }
 
-const dbupdateSessionById = db.prepare(
-  `UPDATE sessions SET username = ?, environment = ?, account = ?, session_cookies = ? WHERE id = ?`,
-);
 export function updateSessionById(
   id: number,
   username: string,
@@ -89,16 +122,23 @@ export function updateSessionById(
   dbupdateSessionById.run(username, environment, account, session_cookies, id);
 }
 
-const updateSessionCookiesStmt = db.prepare(`UPDATE sessions SET session_cookies = ? WHERE id = ?`);
 export function updateSessionCookies(id: number, session_cookies: string) {
   updateSessionCookiesStmt.run(session_cookies, id);
 }
 
-function resetSequenceIfEmpty() {
+export function resetSequenceIfEmpty() {
   const count = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as {
     count: number;
   };
   if (count.count === 0) {
     db.prepare("DELETE FROM sqlite_sequence WHERE name='sessions'").run();
+  }
+}
+
+export function closeDb(): void {
+  if (db) {
+    try {
+      db.close();
+    } catch {}
   }
 }
