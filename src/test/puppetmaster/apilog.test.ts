@@ -5,6 +5,7 @@ import {
   parseDetailsId,
   parseSuccess,
   extractSummariesForCurrentPage,
+  openDetailAndRead,
   downloadApiLogs,
   formatDateForInput,
   getDefaultApiLogDateRange,
@@ -46,9 +47,29 @@ describe('API Logs Scraping (src/lib/eb-puppetmaster/apilog.ts)', () => {
   });
 
   describe('parseDetailsId and parseSuccess', () => {
-    it('parses details ID from onclick attribute', () => {
+    it('parses details ID from onclick attribute with single quotes', () => {
       const id = parseDetailsId("openLogDetails('LOG-GUID-999')");
       assert.strictEqual(id, 'LOG-GUID-999');
+    });
+
+    it('parses details ID from onclick attribute with double quotes and trailing statement', () => {
+      const id = parseDetailsId('openLogDetails("6aad52b93d3c0f565d011211"); return false;');
+      assert.strictEqual(id, '6aad52b93d3c0f565d011211');
+    });
+
+    it('parses details ID with spaces and trailing statements', () => {
+      const id = parseDetailsId('openLogDetails( "6aad52b93d3c0f565d011211" ) ; return false;');
+      assert.strictEqual(id, '6aad52b93d3c0f565d011211');
+    });
+
+    it('parses unquoted details ID', () => {
+      const id = parseDetailsId('openLogDetails(12345); return false;');
+      assert.strictEqual(id, '12345');
+    });
+
+    it('parses details ID with javascript: prefix', () => {
+      const id = parseDetailsId('javascript:openLogDetails("6aad52b93d3c0f565d011211");');
+      assert.strictEqual(id, '6aad52b93d3c0f565d011211');
     });
 
     it('throws error when onclick does not match expected pattern', () => {
@@ -79,7 +100,7 @@ describe('API Logs Scraping (src/lib/eb-puppetmaster/apilog.ts)', () => {
                 <td>2026-08-27 10:00:00</td>
                 <td>2026-08-27 10:00:01</td>
                 <td>True</td>
-                <td><a onclick="openLogDetails('GUID-1')">View</a></td>
+                <td><a onclick='openLogDetails("6aad52b93d3c0f565d011211"); return false;'>View</a></td>
               </tr>
               <tr class="AltRowData">
                 <td>bob.jones</td>
@@ -107,7 +128,7 @@ describe('API Logs Scraping (src/lib/eb-puppetmaster/apilog.ts)', () => {
         requestTimeUtc: '2026-08-27 10:00:00',
         responseTimeUtc: '2026-08-27 10:00:01',
         success: true,
-        detailsId: 'GUID-1',
+        detailsId: '6aad52b93d3c0f565d011211',
       });
 
       assert.deepStrictEqual(summaries[1], {
@@ -120,6 +141,53 @@ describe('API Logs Scraping (src/lib/eb-puppetmaster/apilog.ts)', () => {
         success: false,
         detailsId: 'GUID-2',
       });
+    });
+  });
+
+  describe('openDetailAndRead', () => {
+    it('reads detail form values from page', async () => {
+      const mockDetailHtml = `
+        <!DOCTYPE html>
+        <html>
+          <body>
+            <input type="text" id="ctl00_tbUserName" value="alice.smith" />
+            <input type="text" id="ctl00_tbMachineName" value="WEB-01" />
+            <input type="text" id="ctl00_tbSupportId" value="SUP-1001" />
+            <input type="text" id="ctl00_tbUserIp" value="192.168.1.10" />
+            <a id="ctl00_hrefRequestUri" href="https://api.e-builder.net/v1/projects">URI</a>
+            <input type="text" id="ctl00_tbRequestMethod" value="GET" />
+            <textarea id="ctl00_tbRequestBody">{"test":true}</textarea>
+            <input type="text" id="ctl00_tbRequestTime" value="2026-08-27 10:00:00" />
+            <textarea id="ctl00_tbResponseBody">{"success":true}</textarea>
+            <input type="text" id="ctl00_tbResponseTime" value="2026-08-27 10:00:01" />
+            <input type="text" id="ctl00_tbResponseStatusCode" value="200" />
+            <input type="text" id="ctl00_tbSuccess" value="True" />
+            <button class="rwCloseButton">Close</button>
+            <script>
+              window.openLogDetails = function(id) {
+                // in-page details already populated
+              };
+            </script>
+          </body>
+        </html>
+      `;
+
+      await page.setContent(mockDetailHtml);
+
+      const detail = await openDetailAndRead(page, '6aad52b93d3c0f565d011211', 'SUP-1001');
+
+      assert.strictEqual(detail.userName, 'alice.smith');
+      assert.strictEqual(detail.machineName, 'WEB-01');
+      assert.strictEqual(detail.supportId, 'SUP-1001');
+      assert.strictEqual(detail.userIp, '192.168.1.10');
+      assert.strictEqual(detail.requestUri, 'https://api.e-builder.net/v1/projects');
+      assert.strictEqual(detail.requestMethod, 'GET');
+      assert.strictEqual(detail.requestBody, '{"test":true}');
+      assert.strictEqual(detail.requestTime, '2026-08-27 10:00:00');
+      assert.strictEqual(detail.responseBody, '{"success":true}');
+      assert.strictEqual(detail.responseTime, '2026-08-27 10:00:01');
+      assert.strictEqual(detail.responseCode, '200');
+      assert.strictEqual(detail.success, 'True');
     });
   });
 
