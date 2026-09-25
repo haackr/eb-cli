@@ -37,6 +37,8 @@ export type DownloadApiLogsArgs = {
   cookies: puppeteer.Cookie[];
   browser?: puppeteer.Browser;
   pages: number;
+  fromDate?: string | undefined;
+  toDate?: string | undefined;
   onPageStart?: (page: number) => void | Promise<void>;
   onRecord?: (record: ApiLogRecord) => void | Promise<void>;
 };
@@ -45,6 +47,190 @@ export type DownloadApiLogsResult = {
   pagesProcessed: number;
   recordsDownloaded: number;
 };
+
+export const fromDateInputSelector =
+  '#ctl00_ctl00_ContentPlaceHolder1_contentSection_fromDate_dateInput';
+export const toDateInputSelector =
+  '#ctl00_ctl00_ContentPlaceHolder1_contentSection_toDate_dateInput';
+
+export function formatDateForInput(date: Date): string {
+  const m = (date.getMonth() + 1).toString().padStart(2, '0');
+  const d = date.getDate().toString().padStart(2, '0');
+  const y = date.getFullYear().toString();
+  return `${m}/${d}/${y}`;
+}
+
+export function getDefaultApiLogDateRange(referenceDate?: Date): {
+  fromDate: string;
+  toDate: string;
+} {
+  const to = referenceDate ? new Date(referenceDate) : new Date();
+  const from = new Date(to);
+  from.setDate(from.getDate() - 30);
+
+  return {
+    fromDate: formatDateForInput(from),
+    toDate: formatDateForInput(to),
+  };
+}
+
+export function normalizeDateInput(input: string): string {
+  const trimmed = input.trim();
+  const slashMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed);
+  if (slashMatch && slashMatch[1] && slashMatch[2] && slashMatch[3]) {
+    const m = slashMatch[1].padStart(2, '0');
+    const d = slashMatch[2].padStart(2, '0');
+    const y = slashMatch[3];
+    return `${m}/${d}/${y}`;
+  }
+  const dashMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(trimmed);
+  if (dashMatch && dashMatch[1] && dashMatch[2] && dashMatch[3]) {
+    const y = dashMatch[1];
+    const m = dashMatch[2].padStart(2, '0');
+    const d = dashMatch[3].padStart(2, '0');
+    return `${m}/${d}/${y}`;
+  }
+  return trimmed;
+}
+
+export function isValidDateString(input: string): boolean {
+  const trimmed = input.trim();
+  const slashMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed);
+  const dashMatch = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(trimmed);
+  if (!slashMatch && !dashMatch) return false;
+
+  let m: number;
+  let d: number;
+  let y: number;
+
+  if (slashMatch && slashMatch[1] && slashMatch[2] && slashMatch[3]) {
+    m = parseInt(slashMatch[1], 10);
+    d = parseInt(slashMatch[2], 10);
+    y = parseInt(slashMatch[3], 10);
+  } else if (dashMatch && dashMatch[1] && dashMatch[2] && dashMatch[3]) {
+    y = parseInt(dashMatch[1], 10);
+    m = parseInt(dashMatch[2], 10);
+    d = parseInt(dashMatch[3], 10);
+  } else {
+    return false;
+  }
+
+  if (m < 1 || m > 12) return false;
+  if (d < 1 || d > 31) return false;
+  if (y < 1900 || y > 2100) return false;
+
+  const testDate = new Date(y, m - 1, d);
+  return testDate.getFullYear() === y && testDate.getMonth() === m - 1 && testDate.getDate() === d;
+}
+
+export async function applyDateFilter(
+  page: puppeteer.Page,
+  fromDate: string,
+  toDate: string,
+): Promise<void> {
+  if (typeof page.evaluate === 'function') {
+    await page
+      .evaluate(
+        (fromSel, toSel, fromVal, toVal) => {
+          const fillInput = (sel: string, val: string) => {
+            const input = document.querySelector(sel) as HTMLInputElement | null;
+            if (!input) return;
+            input.focus();
+            input.value = val;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            input.dispatchEvent(new Event('blur', { bubbles: true }));
+
+            const baseId = input.id.replace(/_dateInput$/, '');
+            const picker = (window as any).$find?.(baseId) || (window as any)[baseId];
+            if (picker?.get_dateInput?.()?.set_value) {
+              try {
+                picker.get_dateInput().set_value(val);
+              } catch {}
+            }
+          };
+
+          fillInput(fromSel, fromVal);
+          fillInput(toSel, toVal);
+        },
+        fromDateInputSelector,
+        toDateInputSelector,
+        fromDate,
+        toDate,
+      )
+      .catch(() => null);
+  }
+
+  if (typeof page.$ === 'function') {
+    const fromEl = await page.$(fromDateInputSelector).catch(() => null);
+    if (fromEl && typeof fromEl.click === 'function' && typeof fromEl.type === 'function') {
+      try {
+        await fromEl.click({ clickCount: 3 });
+        await fromEl.type(fromDate);
+      } catch {}
+    }
+
+    const toEl = await page.$(toDateInputSelector).catch(() => null);
+    if (toEl && typeof toEl.click === 'function' && typeof toEl.type === 'function') {
+      try {
+        await toEl.click({ clickCount: 3 });
+        await toEl.type(toDate);
+      } catch {}
+    }
+
+    const buttonSelectors = [
+      '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnFilter',
+      '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnSearch',
+      '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnView',
+      '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnSubmit',
+      '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnApply',
+      '#ctl00_ctl00_ContentPlaceHolder1_contentSection_btnGo',
+      'input[type="submit"][id*="contentSection"]',
+      'button[id*="contentSection"]',
+      'input[type="submit"][value*="Filter" i]',
+      'input[type="submit"][value*="Search" i]',
+      'input[type="submit"][value*="View" i]',
+      'input[type="submit"]',
+      'button[type="submit"]',
+    ];
+
+    let buttonClicked = false;
+    for (const btnSel of buttonSelectors) {
+      const btn = await page.$(btnSel).catch(() => null);
+      if (btn && typeof btn.click === 'function') {
+        const navPromise =
+          typeof page.waitForNavigation === 'function'
+            ? Promise.race([
+                page
+                  .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15_000 })
+                  .catch(() => null),
+                new Promise((resolve) => setTimeout(resolve, 1000)),
+              ])
+            : Promise.resolve();
+        await Promise.all([navPromise, btn.click().catch(() => null)]);
+        buttonClicked = true;
+        break;
+      }
+    }
+
+    if (!buttonClicked && toEl && typeof toEl.press === 'function') {
+      const navPromise =
+        typeof page.waitForNavigation === 'function'
+          ? Promise.race([
+              page
+                .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15_000 })
+                .catch(() => null),
+              new Promise((resolve) => setTimeout(resolve, 1000)),
+            ])
+          : Promise.resolve();
+      await Promise.all([navPromise, toEl.press('Enter').catch(() => null)]);
+    }
+
+    if (typeof page.waitForNetworkIdle === 'function') {
+      await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
+    }
+  }
+}
 
 const apiLogsTableSelector =
   '#ctl00_ctl00_ContentPlaceHolder1_contentSection_grdResults, table.TableGrid';
@@ -312,6 +498,10 @@ export async function downloadApiLogs(
     throw new Error('pages must be at least 1');
   }
 
+  const defaultRange = getDefaultApiLogDateRange();
+  const fromDate = normalizeDateInput(options.fromDate || defaultRange.fromDate);
+  const toDate = normalizeDateInput(options.toDate || defaultRange.toDate);
+
   const browserInstance = browser || (await BrowserManager.getInstance().getBrowser());
 
   let page: puppeteer.Page | null = null;
@@ -330,7 +520,22 @@ export async function downloadApiLogs(
 
     const url = `https://${env}.${baseurl}/da2/Setup/Admin/APILogs.aspx`;
     await page.goto(url, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector(apiLogsTableSelector, { timeout: 20_000 });
+
+    let hasDateInputs = false;
+    if (typeof page.waitForSelector === 'function') {
+      hasDateInputs = await page
+        .waitForSelector(fromDateInputSelector, { timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+    }
+
+    if (hasDateInputs) {
+      await applyDateFilter(page, fromDate, toDate);
+    }
+
+    if (typeof page.waitForSelector === 'function') {
+      await page.waitForSelector(apiLogsTableSelector, { timeout: 20_000 });
+    }
 
     let recordsDownloaded = 0;
 
