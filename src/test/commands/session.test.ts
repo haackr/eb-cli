@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import SessionList from '../../commands/session/list.js';
 import SessionTest from '../../commands/session/test.js';
+import SessionExec from '../../commands/session/exec.js';
 import Logout from '../../commands/logout.js';
 import * as db from '../../lib/db.js';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
@@ -183,6 +184,72 @@ describe('Session Commands (src/commands/session/)', () => {
 
       const sessions = db.getSessions();
       assert.strictEqual(sessions.length, 0);
+    });
+  });
+
+  describe('SessionExec', () => {
+    it('executes a DOM script against a stored session and returns JSON', async () => {
+      db.addSession(
+        'admin@example.com',
+        'us1',
+        'AdminAcct',
+        JSON.stringify([{ name: 'sid', value: 'initial' }]),
+      );
+
+      let navigatedUrls: string[] = [];
+
+      const mockBrowser: any = {
+        connected: true,
+        createBrowserContext: async () => ({
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            goto: async (url: string) => {
+              navigatedUrls.push(url);
+            },
+            url: () => 'https://app.e-builder.net/da2/Processes/ProcessesView.aspx',
+            title: async () => 'Processes View',
+            waitForSelector: async () => ({}),
+            waitForFunction: async () => ({}),
+            waitForNetworkIdle: async () => ({}),
+            evaluate: async (fn: any) => {
+              const fnStr = String(fn);
+              if (fnStr.includes('innerHref')) {
+                return { docTitle: 'Processes View', innerHref: null };
+              }
+              return { extracted: ['Field A', 'Field B'] };
+            },
+            close: async () => {},
+          }),
+          setCookie: async () => {},
+          cookies: async () => [{ name: 'sid', value: 'updated_cookie' }],
+          close: async () => {},
+        }),
+      };
+
+      eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+
+      const result: any = await SessionExec.run([
+        '/da2/Processes/ProcessesView.aspx',
+        '--session-id',
+        '1',
+        '--eval',
+        '(() => ({ extracted: ["Field A", "Field B"] }))()',
+        '--json',
+      ]);
+
+      assert.strictEqual(result.session.username, 'admin@example.com');
+      assert.strictEqual(result.session.origin, 'https://app.e-builder.net');
+      assert.strictEqual(result.url, 'https://app.e-builder.net/da2/Processes/ProcessesView.aspx');
+      assert.deepStrictEqual(result.result, { extracted: ['Field A', 'Field B'] });
+      assert.ok(
+        navigatedUrls.includes('https://app.e-builder.net/da2/Processes/ProcessesView.aspx'),
+      );
+
+      const updatedSession = db.getSessionById(1);
+      assert.deepStrictEqual(JSON.parse(updatedSession!.session_cookies), [
+        { name: 'sid', value: 'updated_cookie' },
+      ]);
     });
   });
 });
