@@ -98,6 +98,88 @@ describe('API Logs Command (src/commands/apilogs/download.ts)', () => {
     assert.strictEqual(result.pagesRequested, 1);
     assert.strictEqual(result.pagesProcessed, 1);
     assert.strictEqual(result.recordsDownloaded, 0);
+    const expectedRange = eb.getDefaultApiLogDateRange();
+    assert.strictEqual(result.fromDate, expectedRange.fromDate);
+    assert.strictEqual(result.toDate, expectedRange.toDate);
     assert.ok(fs.existsSync(outputFile));
+  });
+
+  it('accepts custom --from-date and --to-date flags', async () => {
+    const outputFile = path.join(tmpDir, 'custom-dates.jsonl');
+
+    const mockBrowser: any = {
+      connected: true,
+      createBrowserContext: async () => ({
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForSelector: async () => ({}),
+        }),
+        setCookie: async () => {},
+        cookies: async () => [{ name: 'sid', value: '1' }],
+        close: async () => {},
+      }),
+      defaultBrowserContext: () => ({
+        setCookie: async () => {},
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          goto: async () => {},
+          waitForSelector: async () => ({}),
+          $$eval: async () => [],
+          $: async () => null,
+          close: async () => {},
+        }),
+      }),
+    };
+
+    eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+
+    const result = await ApiLogsDownload.run([
+      '--session-id',
+      '1',
+      '--pages',
+      '1',
+      '--from-date',
+      '2026-08-01',
+      '--to-date',
+      '2026-08-15',
+      '--output-file',
+      outputFile,
+      '--json',
+    ]);
+
+    assert.ok(result);
+    assert.strictEqual(result.fromDate, '08/01/2026');
+    assert.strictEqual(result.toDate, '08/15/2026');
+    assert.ok(fs.existsSync(outputFile));
+  });
+
+  it('rejects invalid date strings', async () => {
+    await assert.rejects(
+      async () => ApiLogsDownload.run(['--session-id', '1', '--from-date', 'invalid-date']),
+      /Invalid --from-date/,
+    );
+
+    await assert.rejects(
+      async () => ApiLogsDownload.run(['--session-id', '1', '--to-date', '99/99/9999']),
+      /Invalid --to-date/,
+    );
+  });
+
+  it('rejects when from-date is after to-date', async () => {
+    await assert.rejects(
+      async () =>
+        ApiLogsDownload.run([
+          '--session-id',
+          '1',
+          '--from-date',
+          '2026-09-15',
+          '--to-date',
+          '2026-09-01',
+        ]),
+      /must be before or equal to/,
+    );
   });
 });

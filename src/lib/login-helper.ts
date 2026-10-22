@@ -155,3 +155,111 @@ export async function refreshSessionIfNeeded(
   }
   return false;
 }
+
+export interface ImportOptions {
+  showBrowser?: boolean | undefined;
+  username?: string | undefined;
+  account?: string | undefined;
+  environment?: string | undefined;
+  profile?: string | undefined;
+  chromeDataDir?: string | undefined;
+}
+
+export async function promptImportAndSaveSession(options: ImportOptions = {}): Promise<void> {
+  let environment = options.environment;
+  if (!environment) {
+    environment = await select({
+      message: 'Select the e-Builder environment you want to import the session from:',
+      choices: [
+        { value: 'us1', name: 'US-1' },
+        { value: 'us2', name: 'US-2' },
+        { value: 'us3', name: 'US-3' },
+        { value: 'us4', name: 'US-4' },
+        { value: 'gov', name: 'GOV' },
+        { value: 'ca', name: 'CA' },
+      ],
+    });
+  }
+
+  let env: eb.Environment;
+  switch (environment) {
+    case 'us1':
+      env = eb.Environment.US1;
+      break;
+    case 'us2':
+      env = eb.Environment.US2;
+      break;
+    case 'us3':
+      env = eb.Environment.US3;
+      break;
+    case 'us4':
+      env = eb.Environment.US4;
+      break;
+    case 'gov':
+      env = eb.Environment.GOV;
+      break;
+    case 'ca':
+      env = eb.Environment.CA;
+      break;
+    default:
+      throw new Error(`Unknown environment: ${environment}`);
+  }
+
+  const showBrowser = options.showBrowser ?? true;
+  const spinner = ora('Importing session from Google Chrome...').start();
+
+  let importResult: eb.ImportSessionResult;
+  try {
+    importResult = await eb.importSessionFromChrome({
+      env,
+      profile: options.profile,
+      chromeDataDir: options.chromeDataDir,
+      headless: !showBrowser,
+      onAccountSelected: (selectedAccount: eb.Account) => {
+        if (!options.account) {
+          options.account = selectedAccount.text;
+        }
+      },
+    });
+  } catch (e: any) {
+    spinner.fail(`Failed to import session from Chrome: ${e.message}`);
+    throw e;
+  }
+
+  spinner.start('Verifying imported session...');
+  const loginCheck = await eb.isLoggedIn(env, true, importResult.cookies);
+  if (!loginCheck.isLoggedIn) {
+    spinner.fail('Failed to verify imported session.');
+    throw new Error('Login verification failed for imported session.');
+  }
+
+  spinner.succeed(
+    importResult.isAlreadyLoggedIn
+      ? 'Active Chrome session detected and imported!'
+      : 'Logged in and session imported!',
+  );
+
+  let username = options.username || importResult.username;
+  if (!username) {
+    username = await input({
+      message: 'Enter your username for this session:',
+    });
+  }
+
+  let account = options.account || importResult.account || '';
+  if (!account && options.account === undefined) {
+    account = await input({
+      message: 'Enter account name (leave empty if none):',
+      default: '',
+    });
+  }
+
+  const savedCookies =
+    loginCheck.newCookies && loginCheck.newCookies.length > 0
+      ? loginCheck.newCookies
+      : importResult.cookies;
+
+  db.addSession(username, eb.getShortEnv(env), account, JSON.stringify(savedCookies));
+
+  await eb.BrowserManager.getInstance().closeBrowser();
+}

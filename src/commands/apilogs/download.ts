@@ -43,6 +43,7 @@ export default class ApiLogsDownload extends BaseSessionCommand {
     'Download API logs from e-Builder, including modal details, across paginated pages';
   static override examples = [
     'eb apilogs download --session-id 1',
+    'eb apilogs download --from-date 2026-08-01 --to-date 2026-08-31',
     'eb apilogs download --username myuser --pages 10 --output-file ./api-logs.jsonl',
   ];
   static override enableJsonFlag = true;
@@ -63,15 +64,49 @@ export default class ApiLogsDownload extends BaseSessionCommand {
       description: 'Overwrite output file if it already exists',
       default: false,
     }),
+    'from-date': Flags.string({
+      aliases: ['from'],
+      description:
+        'Start date for API logs (format: MM/DD/YYYY or YYYY-MM-DD; defaults to 30 days ago)',
+    }),
+    'to-date': Flags.string({
+      aliases: ['to'],
+      description: 'End date for API logs (format: MM/DD/YYYY or YYYY-MM-DD; defaults to today)',
+    }),
   };
 
   public async run(): Promise<{
     outputFile: string;
+    fromDate: string;
+    toDate: string;
     pagesRequested: number;
     pagesProcessed: number;
     recordsDownloaded: number;
   } | void> {
     const { flags } = await this.parse(ApiLogsDownload);
+
+    const defaultRange = eb.getDefaultApiLogDateRange();
+
+    if (flags['from-date'] && !eb.isValidDateString(flags['from-date'])) {
+      this.error(
+        `Invalid --from-date: "${flags['from-date']}". Please use MM/DD/YYYY or YYYY-MM-DD format.`,
+      );
+    }
+
+    if (flags['to-date'] && !eb.isValidDateString(flags['to-date'])) {
+      this.error(
+        `Invalid --to-date: "${flags['to-date']}". Please use MM/DD/YYYY or YYYY-MM-DD format.`,
+      );
+    }
+
+    const fromDate = eb.normalizeDateInput(flags['from-date'] || defaultRange.fromDate);
+    const toDate = eb.normalizeDateInput(flags['to-date'] || defaultRange.toDate);
+
+    const fromTime = new Date(fromDate).getTime();
+    const toTime = new Date(toDate).getTime();
+    if (!isNaN(fromTime) && !isNaN(toTime) && fromTime > toTime) {
+      this.error(`--from-date (${fromDate}) must be before or equal to --to-date (${toDate}).`);
+    }
 
     const session = await this.getSession(flags);
     const env = eb.getEnvironment(session.environment);
@@ -96,7 +131,7 @@ export default class ApiLogsDownload extends BaseSessionCommand {
     let recordsDownloaded = 0;
     const spinner = this.jsonEnabled()
       ? null
-      : ora(`Downloading API logs (pages: ${flags.pages})`).start();
+      : ora(`Downloading API logs from ${fromDate} to ${toDate} (pages: ${flags.pages})`).start();
 
     try {
       const result = await eb.downloadApiLogs({
@@ -104,9 +139,11 @@ export default class ApiLogsDownload extends BaseSessionCommand {
         cookies,
         browser,
         pages: flags.pages,
+        fromDate,
+        toDate,
         onPageStart: async (pageNumber) => {
           if (spinner) {
-            spinner.text = `Downloading API logs (page ${pageNumber}/${flags.pages}, records: ${recordsDownloaded})`;
+            spinner.text = `Downloading API logs (${fromDate} to ${toDate}, page ${pageNumber}/${flags.pages}, records: ${recordsDownloaded})`;
           }
         },
         onRecord: async (record: JsonlLogRecord) => {
@@ -114,7 +151,7 @@ export default class ApiLogsDownload extends BaseSessionCommand {
           recordsDownloaded++;
 
           if (spinner && recordsDownloaded % 10 === 0) {
-            spinner.text = `Downloading API logs (records: ${recordsDownloaded})`;
+            spinner.text = `Downloading API logs (${fromDate} to ${toDate}, records: ${recordsDownloaded})`;
           }
         },
       });
@@ -134,13 +171,15 @@ export default class ApiLogsDownload extends BaseSessionCommand {
 
       if (spinner) {
         spinner.succeed(
-          `Downloaded ${result.recordsDownloaded} API logs from ${result.pagesProcessed} pages to ${outputFile}`,
+          `Downloaded ${result.recordsDownloaded} API logs (${fromDate} to ${toDate}) from ${result.pagesProcessed} pages to ${outputFile}`,
         );
       }
 
       if (this.jsonEnabled()) {
         return {
           outputFile,
+          fromDate,
+          toDate,
           pagesRequested: flags.pages,
           pagesProcessed: result.pagesProcessed,
           recordsDownloaded: result.recordsDownloaded,

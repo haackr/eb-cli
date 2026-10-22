@@ -29,6 +29,7 @@
     "bin": "eb",
     "commands": "./dist/commands",
     "dirname": "eb",
+    "helpClass": "./dist/help.js",
     "plugins": [
       "@oclif/plugin-update"
     ],
