@@ -5,6 +5,17 @@ import * as eb from '../../lib/eb-puppetmaster/index.js';
 import * as db from '../../lib/db.js';
 import type { SessionRow } from '../../lib/db.js';
 
+export interface SessionTestOutput {
+  id: number;
+  username: string;
+  environment: string;
+  account: string;
+  valid: boolean;
+  refreshed: boolean;
+  deleted: boolean;
+  error: string | null;
+}
+
 export default class SessionTest extends Command {
   static override description =
     'test e-Builder sessions, refresh valid ones, and remove invalid ones';
@@ -12,7 +23,9 @@ export default class SessionTest extends Command {
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --username myuser',
     '<%= config.bin %> <%= command.id %> --show-browser',
+    '<%= config.bin %> <%= command.id %> --no-delete --json',
   ];
+  static override enableJsonFlag = true;
   static override flags = {
     username: Flags.string({
       char: 'u',
@@ -22,10 +35,15 @@ export default class SessionTest extends Command {
       char: 's',
       description: 'show browser window during testing',
     }),
+    delete: Flags.boolean({
+      description: 'delete invalid sessions from database',
+      default: true,
+      allowNo: true,
+    }),
   };
   static override aliases: string[] = ['session:clean'];
 
-  public async run(): Promise<void> {
+  public async run(): Promise<SessionTestOutput[] | void> {
     const { flags } = await this.parse(SessionTest);
 
     let sessions: SessionRow[];
@@ -36,29 +54,35 @@ export default class SessionTest extends Command {
     }
 
     if (sessions.length === 0) {
+      if (this.jsonEnabled()) {
+        return [];
+      }
       this.log('No sessions found to test.');
       return;
     }
 
-    this.log(`Testing ${sessions.length} session(s)...`);
+    if (!this.jsonEnabled()) {
+      this.log(`Testing ${sessions.length} session(s)...`);
+    }
 
+    const results: SessionTestOutput[] = [];
     const invalidSessions: SessionRow[] = [];
 
     for (const session of sessions) {
-      const spinner = ora(
-        `Testing session for ${session.username} (${eb.getDisplayName(
-          session.environment,
-        )}/${session.account})`,
-      ).start();
+      const spinner = this.jsonEnabled()
+        ? null
+        : ora(
+            `Testing session for ${session.username} (${eb.getDisplayName(
+              session.environment,
+            )}/${session.account})`,
+          ).start();
 
       const env = eb.getEnvironment(session.environment);
-
       const cookies: Cookie[] = JSON.parse(session.session_cookies);
 
       try {
         const { isLoggedIn, newCookies } = await eb.isLoggedIn(env, !flags.show_browser, cookies);
         if (isLoggedIn) {
-          // Update session with new cookies
           db.updateSessionById(
             session.id,
             session.username,
@@ -66,32 +90,86 @@ export default class SessionTest extends Command {
             session.account,
             JSON.stringify(newCookies),
           );
-          spinner.succeed(`Session valid and refreshed`);
+          if (spinner) {
+            spinner.succeed(`Session valid and refreshed`);
+          }
+          results.push({
+            id: session.id,
+            username: session.username,
+            environment: session.environment,
+            account: session.account,
+            valid: true,
+            refreshed: true,
+            deleted: false,
+            error: null,
+          });
         } else {
-          spinner.fail(`Session invalid`);
+          if (spinner) {
+            spinner.fail(`Session invalid`);
+          }
           invalidSessions.push(session);
+          results.push({
+            id: session.id,
+            username: session.username,
+            environment: session.environment,
+            account: session.account,
+            valid: false,
+            refreshed: false,
+            deleted: false,
+            error: 'Session invalid or cookies expired',
+          });
         }
       } catch (e: any) {
-        spinner.fail(`Error testing session: ${e.message}`);
+        if (spinner) {
+          spinner.fail(`Error testing session: ${e.message}`);
+        }
         invalidSessions.push(session);
+        results.push({
+          id: session.id,
+          username: session.username,
+          environment: session.environment,
+          account: session.account,
+          valid: false,
+          refreshed: false,
+          deleted: false,
+          error: e.message || 'Unknown error testing session',
+        });
       }
     }
 
+    const shouldDelete = flags.delete !== false;
+
     if (invalidSessions.length > 0) {
-      this.log(`\nRemoving ${invalidSessions.length} invalid session(s)...`);
-      for (const session of invalidSessions) {
-        db.deleteSessionById(session.id);
+      if (shouldDelete) {
+        if (!this.jsonEnabled()) {
+          this.log(`\nRemoving ${invalidSessions.length} invalid session(s)...`);
+        }
+        for (const session of invalidSessions) {
+          db.deleteSessionById(session.id);
+          const res = results.find((r) => r.id === session.id);
+          if (res) res.deleted = true;
+
+          if (!this.jsonEnabled()) {
+            this.log(
+              `Removed session: ${session.username} (${eb.getDisplayName(
+                session.environment,
+              )}/${session.account})`,
+            );
+          }
+        }
+      } else if (!this.jsonEnabled()) {
         this.log(
-          `Removed session: ${session.username} (${eb.getDisplayName(
-            session.environment,
-          )}/${session.account})`,
+          `\nFound ${invalidSessions.length} invalid session(s) (retained due to --no-delete).`,
         );
       }
-    } else {
+    } else if (!this.jsonEnabled()) {
       this.log('\nAll sessions are valid.');
     }
 
-    // Close the browser to allow the process to exit
     await eb.BrowserManager.getInstance().closeBrowser();
+
+    if (this.jsonEnabled()) {
+      return results;
+    }
   }
 }

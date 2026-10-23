@@ -5,20 +5,19 @@ import * as os from 'os';
 import { Environment, baseurl, BrowserManager } from './index.js';
 
 // Selectors for the login page
-const usernameSelector = '#txtUsername >>> #mwc_id_0_text_input';
-const usernameContinueButtonSelector = '#usernameContinueBtn >>> button';
-const passwordSelector = '#txtPassword >>> #mwc_id_1_text_input';
-const signInButtonSelector = '#signIn >>> button';
-const selectAccountSelector = '#selectAccount >>> select';
-const selectAccountContinueButtonSelector = '#selectAccountContinueBtn >>> button';
+const usernameSelector =
+  '#ctl00_ContentPlaceHolder1_txtUserName, #txtUsername >>> #mwc_id_0_text_input, #txtUsername, input[name*="txtUserName"], input[name*="UserName"]';
+const passwordSelector =
+  '#ctl00_ContentPlaceHolder1_txtPassword, #txtPassword >>> #mwc_id_1_text_input, #txtPassword, input[name*="Password"]';
+const signInButtonSelector =
+  '#ctl00_ContentPlaceHolder1_btnLogin, #signIn >>> button, #signIn, input[value="Log In"], input[type="submit"]';
+const selectAccountSelector =
+  '#ctl00_ContentPlaceHolder1_ddlAccounts, #selectAccount >>> select, select[name*="Account"], select';
+const selectAccountContinueButtonSelector =
+  '#ctl00_ContentPlaceHolder1_btnNext, #selectAccountContinueBtn >>> button, #selectAccountContinueBtn, input[value="Next"], input[type="submit"]';
 const myHomeTabSelector = '#ctl00_ucTopNav2_tabHomeLink';
 const errorMessageSelector = '#errorMessage';
 const changePasswordUrl = '/auth/Authenticate/LoginSequence.aspx';
-const trimbleUsernameSelector = '#username-field';
-const trimbleUsernameContinueButtonSelector = '#enter_username_submit';
-const trimblePasswordSelector =
-  'input[tcp-auto="input-password"][type="password"][name="password"]';
-const trimbleSignInButtonSelector = 'button:has(span[data-i18n="button_sign_in"])';
 
 export type Account = {
   value: string;
@@ -146,7 +145,11 @@ function isNavigationRace(error: unknown): boolean {
 
 export function isEBuilderAuthenticatedUrl(url: URL, env: Environment): boolean {
   const eBuilderHost = `${env}.${baseurl}`;
-  if (url.hostname !== eBuilderHost) return false;
+  const isEBuilderDomain =
+    url.hostname === eBuilderHost ||
+    url.hostname === 'app.e-builder.net' ||
+    url.hostname.endsWith('.e-builder.net');
+  if (!isEBuilderDomain) return false;
 
   const path = url.pathname.toLowerCase();
   if (
@@ -174,7 +177,11 @@ export async function isEBuilderPageAuthenticated(
     }
 
     const eBuilderHost = `${env}.${baseurl}`;
-    if (url.hostname !== eBuilderHost) return false;
+    const isEBuilderDomain =
+      url.hostname === eBuilderHost ||
+      url.hostname === 'app.e-builder.net' ||
+      url.hostname.endsWith('.e-builder.net');
+    if (!isEBuilderDomain) return false;
 
     if (isEBuilderAuthenticatedUrl(url, env)) {
       return true;
@@ -206,6 +213,8 @@ async function waitForEBuilderHome(
   browser: puppeteer.Browser,
   env: Environment,
   onAccountSelected?: (account: Account) => void,
+  targetAccount?: string,
+  accountSpecifier?: Function,
 ): Promise<puppeteer.Page> {
   const eBuilderHost = `${env}.${baseurl}`;
   const timeoutAt = Date.now() + 10 * 60_000;
@@ -221,7 +230,35 @@ async function waitForEBuilderHome(
         continue;
       }
 
-      if (url.hostname !== eBuilderHost) continue;
+      const isEBuilderDomain =
+        url.hostname === eBuilderHost ||
+        url.hostname === 'app.e-builder.net' ||
+        url.hostname.endsWith('.e-builder.net');
+      if (!isEBuilderDomain) continue;
+
+      if (
+        isEBuilderAuthenticatedUrl(url, env) ||
+        (await isEBuilderPageAuthenticated(openPage, env))
+      ) {
+        return openPage;
+      }
+
+      if (targetAccount || accountSpecifier) {
+        try {
+          const resolved = await tryResolveAccountSelection(
+            openPage,
+            targetAccount,
+            accountSpecifier,
+            onAccountSelected,
+          );
+          if (resolved) {
+            await new Promise((r) => setTimeout(r, 1500));
+            continue;
+          }
+        } catch (error) {
+          if (isNavigationRace(error)) continue;
+        }
+      }
 
       let account: Account | undefined;
       try {
@@ -234,18 +271,276 @@ async function waitForEBuilderHome(
         throw error;
       }
       if (account) onAccountSelected?.(account);
-
-      if (
-        isEBuilderAuthenticatedUrl(url, env) ||
-        (await isEBuilderPageAuthenticated(openPage, env))
-      ) {
-        return openPage;
-      }
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
   throw new Error('Timed out waiting for authentication to redirect to e-Builder.');
+}
+
+const bypassPasskeyScript = `
+(() => {
+  try {
+    if (!window.navigator) return;
+    if (!window.navigator.credentials) {
+      window.navigator.credentials = {};
+    }
+    window.navigator.credentials.get = async function(...args) {
+      console.log('[eb-cli] Bypassing passkey WebAuthn prompt automatically');
+      throw new DOMException('Passkey bypassed by CLI automation', 'NotAllowedError');
+    };
+  } catch (e) {}
+})();
+`;
+
+async function setupPasskeyBypass(
+  browser: puppeteer.Browser,
+  page?: puppeteer.Page,
+): Promise<void> {
+  if (page) {
+    await page.evaluateOnNewDocument(bypassPasskeyScript).catch(() => {});
+    await page.evaluate(bypassPasskeyScript).catch(() => {});
+  }
+  browser.on('targetcreated', async (target) => {
+    try {
+      const p = await target.page();
+      if (p) {
+        await p.evaluateOnNewDocument(bypassPasskeyScript).catch(() => {});
+        await p.evaluate(bypassPasskeyScript).catch(() => {});
+      }
+    } catch {}
+  });
+}
+
+async function tryResolveAccountSelection(
+  page: puppeteer.Page,
+  targetAccount?: string,
+  accountSpecifier?: Function,
+  onAccountSelected?: (account: Account) => void,
+): Promise<boolean> {
+  const hasAccountSelector = await page
+    .evaluate(() => {
+      return Boolean(
+        document.querySelector('#selectAccount') ||
+        document.querySelector('#ctl00_ContentPlaceHolder1_ddlAccounts') ||
+        document.querySelector('select[name*="Account"]') ||
+        document.querySelector('modus-select'),
+      );
+    })
+    .catch(() => false);
+
+  if (!hasAccountSelector) return false;
+
+  const accounts: Account[] = await page
+    .evaluate(() => {
+      const list: { value: string; text: string }[] = [];
+
+      const selects = Array.from(document.querySelectorAll('select'));
+      const modusSelect = document.querySelector('modus-select, #selectAccount');
+      if (modusSelect && modusSelect.shadowRoot) {
+        const shadowSelect = modusSelect.shadowRoot.querySelector('select');
+        if (shadowSelect) selects.push(shadowSelect);
+      }
+
+      if (
+        modusSelect &&
+        (modusSelect as any).options &&
+        Array.isArray((modusSelect as any).options)
+      ) {
+        for (const opt of (modusSelect as any).options) {
+          list.push({
+            value: String(opt.value ?? opt.id ?? ''),
+            text: String(opt.label ?? opt.display ?? opt.text ?? ''),
+          });
+        }
+      }
+
+      for (const select of selects) {
+        for (let i = 0; i < select.options.length; i++) {
+          const opt = select.options[i];
+          if (
+            opt &&
+            opt.value &&
+            opt.text &&
+            !opt.text.toLowerCase().includes('select an account')
+          ) {
+            list.push({ value: opt.value, text: opt.text.trim() });
+          }
+        }
+      }
+
+      const unique = new Map<string, { value: string; text: string }>();
+      for (const item of list) {
+        if (item.value && !unique.has(item.value)) {
+          unique.set(item.value, item);
+        }
+      }
+      return Array.from(unique.values());
+    })
+    .catch(() => []);
+
+  if (accounts.length === 0) {
+    return false;
+  }
+
+  let selectedValue: string | undefined;
+  let selectedText: string | undefined;
+
+  if (targetAccount) {
+    const match = accounts.find((a) => a.text.toLowerCase().includes(targetAccount.toLowerCase()));
+    if (match) {
+      selectedValue = match.value;
+      selectedText = match.text;
+    }
+  }
+
+  if (!selectedValue && accountSpecifier) {
+    const chosen = await accountSpecifier(accounts);
+    if (typeof chosen === 'string') {
+      selectedValue = chosen;
+      selectedText = accounts.find((a) => a.value === chosen)?.text;
+    } else if (chosen && chosen.value) {
+      selectedValue = chosen.value;
+      selectedText = chosen.text;
+    }
+  }
+
+  if (!selectedValue && accounts.length === 1) {
+    selectedValue = accounts[0]?.value;
+    selectedText = accounts[0]?.text;
+  }
+
+  if (!selectedValue) {
+    return false;
+  }
+
+  if (selectedText && onAccountSelected) {
+    onAccountSelected({ value: selectedValue, text: selectedText });
+  }
+
+  const clicked = await page
+    .evaluate((val) => {
+      let changed = false;
+
+      const selects = Array.from(document.querySelectorAll('select'));
+      const modusSelect = document.querySelector('modus-select, #selectAccount');
+      if (modusSelect) {
+        try {
+          (modusSelect as any).value = val;
+          modusSelect.dispatchEvent(new CustomEvent('valueChange', { detail: val }));
+        } catch {}
+        if (modusSelect.shadowRoot) {
+          const shadowSelect = modusSelect.shadowRoot.querySelector('select');
+          if (shadowSelect) selects.push(shadowSelect);
+        }
+      }
+
+      for (const select of selects) {
+        select.value = val;
+        select.dispatchEvent(new Event('input', { bubbles: true }));
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        changed = true;
+      }
+
+      const mwcBtn = document.querySelector(
+        '#selectAccountContinueBtn, modus-button[id*="Continue"]',
+      );
+      if (mwcBtn) {
+        mwcBtn.removeAttribute('disabled');
+        (mwcBtn as any).disabled = false;
+        const shadowBtn = mwcBtn.shadowRoot?.querySelector<HTMLElement>('button');
+        if (shadowBtn) {
+          shadowBtn.removeAttribute('disabled');
+          (shadowBtn as any).disabled = false;
+          shadowBtn.click();
+        }
+        (mwcBtn as HTMLElement).click();
+        return true;
+      }
+
+      const stdBtn = document.querySelector<HTMLElement>(
+        '#ctl00_ContentPlaceHolder1_btnNext, input[value="Next"], input[type="submit"]',
+      );
+      if (stdBtn) {
+        stdBtn.click();
+        return true;
+      }
+
+      return changed;
+    }, selectedValue)
+    .catch(() => false);
+
+  return clicked;
+}
+
+async function domClick(page: puppeteer.Page, selector: string): Promise<boolean> {
+  try {
+    return await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (el && el instanceof HTMLElement) {
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        el.click();
+        return true;
+      }
+      return false;
+    }, selector);
+  } catch {
+    return false;
+  }
+}
+
+async function domType(
+  page: puppeteer.Page,
+  selector: string,
+  text: string,
+  elementHandle?: puppeteer.ElementHandle | null,
+): Promise<boolean> {
+  try {
+    await page.evaluate((sel) => {
+      const el = document.querySelector<HTMLInputElement>(sel);
+      if (el) {
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        el.focus();
+      }
+    }, selector);
+
+    if (elementHandle) {
+      await elementHandle.focus().catch(() => {});
+    }
+
+    await page.keyboard.down('Meta').catch(() => {});
+    await page.keyboard.press('a').catch(() => {});
+    await page.keyboard.up('Meta').catch(() => {});
+    await page.keyboard.press('Backspace').catch(() => {});
+    await page.keyboard.type(text, { delay: 40 });
+
+    return await page.evaluate(
+      (sel, val) => {
+        const el = document.querySelector<HTMLInputElement>(sel);
+        if (el) {
+          if (el.value !== val) {
+            const setter = Object.getOwnPropertyDescriptor(
+              window.HTMLInputElement.prototype,
+              'value',
+            )?.set;
+            if (setter) {
+              setter.call(el, val);
+            } else {
+              el.value = val;
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          return true;
+        }
+        return false;
+      },
+      selector,
+      text,
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function completeTrimbleIdLogin(
@@ -256,11 +551,16 @@ async function completeTrimbleIdLogin(
   username?: string,
   password?: string,
   onAccountSelected?: (account: Account) => void,
+  getTotp?: () => Promise<string | undefined>,
+  targetAccount?: string,
+  accountSpecifier?: Function,
 ): Promise<puppeteer.Cookie[]> {
   let authBrowser = browser;
   let authPage = page;
 
-  if (headless) {
+  // If headless is requested and we have automated credentials (username, password, getTotp),
+  // stay headless! Only launch a visible browser if human interactive input is needed.
+  if (headless && !(username && password && getTotp)) {
     const trimbleUrl = page.url();
     const cookies = await browser.cookies();
 
@@ -274,24 +574,254 @@ async function completeTrimbleIdLogin(
     await authPage.goto(trimbleUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
   }
 
-  if (username) {
-    await authPage.locator(trimbleUsernameSelector).fill(username);
-    await authPage.locator(trimbleUsernameContinueButtonSelector).click();
-  }
-  if (password) {
-    await authPage.waitForFunction(
-      (selector) => {
-        const input = document.querySelector<HTMLInputElement>(selector);
-        return Boolean(input && !input.disabled && input.getClientRects().length > 0);
-      },
-      {},
-      trimblePasswordSelector,
-    );
-    await authPage.locator(trimblePasswordSelector).fill(password);
-    await authPage.locator(trimbleSignInButtonSelector).click();
+  if (getTotp) {
+    await setupPasskeyBypass(authBrowser, authPage);
   }
 
-  await waitForEBuilderHome(authBrowser, env, onAccountSelected);
+  // 1. Trimble ID Username
+  if (username) {
+    const usernameInput = await authPage
+      .waitForSelector('#username-field, input[name="username"]', {
+        visible: true,
+        timeout: 15_000,
+      })
+      .catch(() => null);
+
+    if (usernameInput) {
+      await domType(authPage, '#username-field, input[name="username"]', username, usernameInput);
+      await new Promise((r) => setTimeout(r, 200));
+      await authPage.evaluate(() => {
+        const nextBtn =
+          document.querySelector<HTMLButtonElement>('#enter_username_submit') ||
+          document.querySelector<HTMLButtonElement>('button[name="username-submit"]') ||
+          Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+            (b.textContent || '').trim().toLowerCase().includes('next'),
+          );
+        nextBtn?.click();
+      });
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+
+  // 2. Trimble ID Password
+  if (password) {
+    const passwordInput = await authPage.waitForSelector(
+      'input[name="password"], input[type="password"], #password',
+      {
+        visible: true,
+        timeout: 30_000,
+      },
+    );
+
+    if (passwordInput) {
+      await domType(
+        authPage,
+        'input[name="password"], input[type="password"], #password',
+        password,
+        passwordInput,
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      await authPage.evaluate(() => {
+        const signInBtn =
+          document.querySelector<HTMLButtonElement>('button[name="password-submit"]') ||
+          document.querySelector<HTMLButtonElement>('#button_sign_in') ||
+          Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+            (b.textContent || '').trim().toLowerCase().includes('sign in'),
+          );
+        signInBtn?.click();
+      });
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+
+  // 3. Handle Trimble ID 2FA (passkey or verification code / TOTP)
+  try {
+    const mfaTimeout = Date.now() + 120_000;
+    let totpSubmitted = false;
+    let lastSubmitTime = 0;
+
+    while (Date.now() < mfaTimeout) {
+      const currentUrl = authPage.url();
+      if (currentUrl.includes('e-builder.net')) {
+        break;
+      }
+
+      // Check if code was rejected and needs retry
+      const hasCodeError = await authPage
+        .evaluate(() => {
+          const text = document.body?.innerText?.toLowerCase() || '';
+          return (
+            text.includes('invalid code') ||
+            text.includes('incorrect code') ||
+            text.includes('try again')
+          );
+        })
+        .catch(() => false);
+      if (hasCodeError && totpSubmitted) {
+        console.log('[eb-cli] Code rejection detected. Retrying with fresh TOTP...');
+        totpSubmitted = false;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
+      // Check for verification code input
+      const hasCodeInput = await authPage
+        .evaluate(() => {
+          const el = document.querySelector<HTMLInputElement>(
+            '#verification_code, input[name="code"], input[name="verification_code"], input[name*="code" i], input[id*="code" i], input[inputmode="numeric"]',
+          );
+          return Boolean(el);
+        })
+        .catch(() => false);
+
+      if (hasCodeInput) {
+        if (getTotp && !totpSubmitted) {
+          console.log('[eb-cli] Verification code input detected. Resolving live TOTP...');
+          const totp = await getTotp();
+          if (totp) {
+            console.log('[eb-cli] Typing TOTP code and submitting...');
+
+            // Set value via native setter + synthetic events
+            await authPage.evaluate((totpVal) => {
+              const input = document.querySelector<HTMLInputElement>(
+                '#verification_code, input[name="code"], input[name="verification_code"], input[name*="code" i], input[id*="code" i], input[inputmode="numeric"]',
+              );
+              if (input) {
+                input.focus();
+                const setter = Object.getOwnPropertyDescriptor(
+                  window.HTMLInputElement.prototype,
+                  'value',
+                )?.set;
+                if (setter) {
+                  setter.call(input, totpVal);
+                } else {
+                  input.value = totpVal;
+                }
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+              }
+            }, totp);
+
+            // Also type via keyboard to trigger key events
+            await authPage.focus('#verification_code, input[name="code"]').catch(() => {});
+            await authPage.keyboard.down('Meta').catch(() => {});
+            await authPage.keyboard.press('a').catch(() => {});
+            await authPage.keyboard.up('Meta').catch(() => {});
+            await authPage.keyboard.press('Backspace').catch(() => {});
+            await authPage.keyboard.type(totp, { delay: 40 });
+
+            totpSubmitted = true;
+            lastSubmitTime = Date.now();
+            await new Promise((r) => setTimeout(r, 300));
+
+            // Press Enter on the input
+            await authPage.keyboard.press('Enter').catch(() => {});
+            await new Promise((r) => setTimeout(r, 400));
+
+            // Also click any submit / verify / continue button
+            await authPage.evaluate(() => {
+              const submitBtn =
+                document.querySelector<HTMLButtonElement>('#enter_verification_code_submit') ||
+                document.querySelector<HTMLButtonElement>('button[name="submit"]') ||
+                document.querySelector<HTMLButtonElement>('button[type="submit"]') ||
+                Array.from(
+                  document.querySelectorAll<HTMLButtonElement>('button, input[type="submit"]'),
+                ).find((b) => {
+                  const txt = (b.textContent || (b as HTMLInputElement).value || '')
+                    .trim()
+                    .toLowerCase();
+                  return (
+                    txt === 'submit' || txt === 'verify' || txt === 'continue' || txt === 'next'
+                  );
+                });
+              if (submitBtn) {
+                submitBtn.removeAttribute('disabled');
+                (submitBtn as any).disabled = false;
+                submitBtn.click();
+              }
+            });
+
+            console.log('[eb-cli] Submitted TOTP verification code.');
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+        } else if (totpSubmitted && Date.now() - lastSubmitTime > 6000) {
+          console.log('[eb-cli] Still on verification page. Retrying submission...');
+          await authPage.keyboard.press('Enter').catch(() => {});
+          await authPage.evaluate(() => {
+            const submitBtn =
+              document.querySelector<HTMLButtonElement>('#enter_verification_code_submit') ||
+              document.querySelector<HTMLButtonElement>('button[name="submit"]') ||
+              document.querySelector<HTMLButtonElement>('button[type="submit"]') ||
+              Array.from(
+                document.querySelectorAll<HTMLButtonElement>('button, input[type="submit"]'),
+              ).find((b) => {
+                const txt = (b.textContent || (b as HTMLInputElement).value || '')
+                  .trim()
+                  .toLowerCase();
+                return txt === 'submit' || txt === 'verify' || txt === 'continue' || txt === 'next';
+              });
+            if (submitBtn) {
+              submitBtn.removeAttribute('disabled');
+              (submitBtn as any).disabled = false;
+              submitBtn.click();
+            }
+          });
+          if (Date.now() - lastSubmitTime > 15000) {
+            totpSubmitted = false;
+          }
+        }
+      }
+
+      // If we have TOTP available but the code input is NOT present yet,
+      // click "More options" or choose "Authenticator"
+      if (getTotp && !totpSubmitted && !hasCodeInput) {
+        await authPage.evaluate(() => {
+          const allElements = Array.from(
+            document.querySelectorAll('a, button, [role="button"], li, div[role="link"], span'),
+          );
+
+          // First, see if an authenticator / verification code option is directly listed
+          const authOption = allElements.find((el) => {
+            const txt = (el.textContent || '').trim().toLowerCase();
+            return (
+              (txt.includes('authenticator') ||
+                txt.includes('verification code') ||
+                txt.includes('one-time code')) &&
+              !txt.includes('passkey')
+            );
+          });
+          if (authOption && authOption instanceof HTMLElement) {
+            authOption.click();
+            return;
+          }
+
+          // Otherwise look for "More options" or "Try another way"
+          const moreOptions = allElements.find((el) => {
+            const txt = (el.textContent || '').trim().toLowerCase();
+            return (
+              txt.includes('more options') ||
+              txt.includes('another way') ||
+              txt.includes('other options')
+            );
+          });
+          if (moreOptions && moreOptions instanceof HTMLElement) {
+            moreOptions.click();
+          }
+        });
+      }
+
+      // If no TOTP handler was provided, fall back to passkey button
+      if (!getTotp) {
+        await domClick(authPage, '#button_verify_passkey');
+      }
+
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } catch {
+    // Continue waiting for redirect
+  }
+
+  await waitForEBuilderHome(authBrowser, env, onAccountSelected, targetAccount, accountSpecifier);
   return await authBrowser.cookies();
 }
 
@@ -304,6 +834,7 @@ export async function login(
   accountSpecifier?: Function,
   browser?: puppeteer.Browser,
   onAccountSelected?: (account: Account) => void,
+  getTotp?: () => Promise<string | undefined>,
 ): Promise<puppeteer.Cookie[]> {
   if (!browser) {
     browser = await BrowserManager.getInstance().getBrowser(headless, [
@@ -317,14 +848,69 @@ export async function login(
   page.setDefaultNavigationTimeout(90_000);
   page.setDefaultTimeout(90_000);
 
+  if (getTotp) {
+    await setupPasskeyBypass(browser, page);
+  }
+
   const loginUrl = `https://${env}.${baseurl}/auth/www/index.aspx?ReturnUrl=%2f`;
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
 
   if (username) {
-    await page.locator(usernameSelector).fill(username);
+    await page.waitForFunction(
+      () => {
+        return (
+          document.querySelector('#txtUsername') !== null ||
+          document.querySelector('#ctl00_ContentPlaceHolder1_txtUserName') !== null ||
+          document.querySelector('input[type="email"]') !== null
+        );
+      },
+      { timeout: 30_000 },
+    );
+
+    await page.evaluate((uname) => {
+      const mwc = document.querySelector<HTMLElement & { value?: string }>('#txtUsername');
+      if (mwc) {
+        mwc.value = uname;
+        mwc.dispatchEvent(new CustomEvent('valueChange', { detail: uname }));
+      }
+      const shadowInput = mwc?.shadowRoot?.querySelector<HTMLInputElement>('input');
+      if (shadowInput) {
+        shadowInput.focus();
+        shadowInput.value = uname;
+        shadowInput.dispatchEvent(new Event('input', { bubbles: true }));
+        shadowInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const standardInput = document.querySelector<HTMLInputElement>(
+        '#ctl00_ContentPlaceHolder1_txtUserName, input[name*="UserName"], input[type="email"]',
+      );
+      if (standardInput) {
+        standardInput.focus();
+        standardInput.value = uname;
+        standardInput.dispatchEvent(new Event('input', { bubbles: true }));
+        standardInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, username);
+
+    await new Promise((r) => setTimeout(r, 500));
+
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 90_000 }),
-      page.locator(usernameContinueButtonSelector).click(),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {}),
+      page.evaluate(() => {
+        const mwcBtn = document.querySelector('#usernameContinueBtn');
+        const shadowBtn = mwcBtn?.shadowRoot?.querySelector<HTMLElement>('button');
+        if (shadowBtn && !shadowBtn.hasAttribute('disabled')) {
+          shadowBtn.click();
+          return;
+        }
+        if (mwcBtn instanceof HTMLElement) {
+          mwcBtn.click();
+          return;
+        }
+        const standardBtn = document.querySelector<HTMLElement>(
+          '#ctl00_ContentPlaceHolder1_btnNext, input[value="Next"], input[type="submit"]',
+        );
+        standardBtn?.click();
+      }),
     ]);
 
     const trimbleIdPage = await waitForTrimbleIdPage(browser);
@@ -337,6 +923,9 @@ export async function login(
         username,
         password,
         onAccountSelected,
+        getTotp,
+        account,
+        accountSpecifier,
       );
     }
 
@@ -345,7 +934,7 @@ export async function login(
         throw new Error('Password must be provided for headless mode.');
       }
 
-      await waitForEBuilderHome(browser, env);
+      await waitForEBuilderHome(browser, env, onAccountSelected, account, accountSpecifier);
       return await browser.cookies();
     }
 
@@ -399,6 +988,9 @@ export async function login(
         undefined,
         undefined,
         onAccountSelected,
+        getTotp,
+        account,
+        accountSpecifier,
       );
     }
     await page.waitForSelector(passwordSelector);
@@ -471,33 +1063,37 @@ export async function isLoggedIn(
   page.setDefaultNavigationTimeout(90_000);
   page.setDefaultTimeout(90_000);
 
-  // Clear existing cookies and set new ones
-  await context.setCookie(...cookies);
-  await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`, {
-    waitUntil: 'domcontentloaded',
-    timeout: 90_000,
-  });
-
   try {
-    await page.waitForSelector(myHomeTabSelector, {
-      timeout: 5000,
+    // Clear existing cookies and set new ones
+    await context.setCookie(...cookies);
+    await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 90_000,
     });
-    loggedIn = true;
-    newCookies = await context.cookies();
-  } catch {
+
     try {
-      await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
-      loggedIn = await isEBuilderPageAuthenticated(page, env);
-      if (loggedIn) {
-        newCookies = await context.cookies();
-      }
+      await page.waitForSelector(myHomeTabSelector, {
+        timeout: 5000,
+      });
+      loggedIn = true;
+      newCookies = await context.cookies();
     } catch {
-      loggedIn = false;
+      try {
+        await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
+        loggedIn = await isEBuilderPageAuthenticated(page, env);
+        if (loggedIn) {
+          newCookies = await context.cookies();
+        }
+      } catch {
+        loggedIn = false;
+      }
     }
+  } catch {
+    loggedIn = false;
   }
 
   // Close the context to clean up
-  await context.close();
+  await context.close().catch(() => {});
 
   return { isLoggedIn: loggedIn, newCookies: newCookies };
 }

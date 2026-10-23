@@ -12,6 +12,25 @@ export type SessionRow = {
   created_at: string;
 };
 
+export type CredentialRefRow = {
+  id: number;
+  session_id: number;
+  provider: string;
+  item_ref: string;
+  vault?: string | null;
+  created_at: string;
+};
+
+export type SchemaCacheRow = {
+  id: number;
+  environment: string;
+  account: string;
+  schema_type: string;
+  entity_key: string;
+  data_json: string;
+  updated_at: string;
+};
+
 let db: Database.Database;
 let insertSession: Database.Statement;
 let getAllSessions: Database.Statement;
@@ -21,6 +40,14 @@ let deleteSessionId: Database.Statement;
 let deleteUserSessions: Database.Statement;
 let dbupdateSessionById: Database.Statement;
 let updateSessionCookiesStmt: Database.Statement;
+
+let getCachedSchemaStmt: Database.Statement;
+let setCachedSchemaStmt: Database.Statement;
+let clearCachedSchemaStmt: Database.Statement;
+
+let getCredentialRefStmt: Database.Statement;
+let setCredentialRefStmt: Database.Statement;
+let deleteCredentialRefStmt: Database.Statement;
 
 function getDbPath(): string {
   if (process.env['EB_CLI_DB_PATH']) {
@@ -51,6 +78,34 @@ function prepareStatements() {
     `UPDATE sessions SET username = ?, environment = ?, account = ?, session_cookies = ? WHERE id = ?`,
   );
   updateSessionCookiesStmt = db.prepare(`UPDATE sessions SET session_cookies = ? WHERE id = ?`);
+
+  getCachedSchemaStmt = db.prepare(`
+    SELECT data_json FROM schema_cache 
+    WHERE environment = ? AND account = ? AND schema_type = ? AND entity_key = ?
+  `);
+  setCachedSchemaStmt = db.prepare(`
+    INSERT INTO schema_cache (environment, account, schema_type, entity_key, data_json, updated_at)
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(environment, account, schema_type, entity_key) DO UPDATE SET
+      data_json = excluded.data_json,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+  clearCachedSchemaStmt = db.prepare(`
+    DELETE FROM schema_cache
+    WHERE environment = ? AND account = ? AND schema_type = ? AND entity_key = ?
+  `);
+
+  getCredentialRefStmt = db.prepare(`SELECT * FROM credential_refs WHERE session_id = ?`);
+  setCredentialRefStmt = db.prepare(`
+    INSERT INTO credential_refs (session_id, provider, item_ref, vault, created_at)
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(session_id) DO UPDATE SET
+      provider = excluded.provider,
+      item_ref = excluded.item_ref,
+      vault = excluded.vault,
+      created_at = CURRENT_TIMESTAMP
+  `);
+  deleteCredentialRefStmt = db.prepare(`DELETE FROM credential_refs WHERE session_id = ?`);
 }
 
 export function createTables() {
@@ -62,6 +117,27 @@ export function createTables() {
       account TEXT,
       session_cookies TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS schema_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      environment TEXT NOT NULL,
+      account TEXT NOT NULL,
+      schema_type TEXT NOT NULL,
+      entity_key TEXT NOT NULL,
+      data_json TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(environment, account, schema_type, entity_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS credential_refs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER UNIQUE,
+      provider TEXT NOT NULL,
+      item_ref TEXT NOT NULL,
+      vault TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
     );
   `);
 }
@@ -124,6 +200,53 @@ export function updateSessionById(
 
 export function updateSessionCookies(id: number, session_cookies: string) {
   updateSessionCookiesStmt.run(session_cookies, id);
+}
+
+export function getCachedSchema(
+  env: string,
+  account: string,
+  schemaType: string,
+  entityKey: string,
+): string | undefined {
+  const row = getCachedSchemaStmt.get(env, account, schemaType, entityKey) as
+    { data_json: string } | undefined;
+  return row?.data_json;
+}
+
+export function setCachedSchema(
+  env: string,
+  account: string,
+  schemaType: string,
+  entityKey: string,
+  dataJson: string,
+): void {
+  setCachedSchemaStmt.run(env, account, schemaType, entityKey, dataJson);
+}
+
+export function clearCachedSchema(
+  env: string,
+  account: string,
+  schemaType: string,
+  entityKey: string,
+): void {
+  clearCachedSchemaStmt.run(env, account, schemaType, entityKey);
+}
+
+export function getCredentialRef(sessionId: number): CredentialRefRow | undefined {
+  return getCredentialRefStmt.get(sessionId) as CredentialRefRow | undefined;
+}
+
+export function setCredentialRef(
+  sessionId: number,
+  provider: string,
+  itemRef: string,
+  vault?: string,
+): void {
+  setCredentialRefStmt.run(sessionId, provider, itemRef, vault ?? null);
+}
+
+export function deleteCredentialRef(sessionId: number): void {
+  deleteCredentialRefStmt.run(sessionId);
 }
 
 export function resetSequenceIfEmpty() {

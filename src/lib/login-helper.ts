@@ -11,6 +11,7 @@ interface LoginOptions {
   account?: string;
   environment?: string;
   ssoUrl?: string;
+  getTotp?: () => Promise<string | undefined>;
 }
 
 export async function promptLoginAndSaveSession(options: LoginOptions = {}): Promise<void> {
@@ -97,10 +98,14 @@ export async function promptLoginAndSaveSession(options: LoginOptions = {}): Pro
         (selectedAccount: Account) => {
           options.account = selectedAccount.text;
         },
+        options.getTotp,
       );
     }
   } catch (e: any) {
     spinner.fail(`Failed to log in: ${e.message}`);
+    if (e.stack) {
+      console.error(e.stack);
+    }
     throw e;
   }
 
@@ -141,19 +146,23 @@ export async function refreshSessionIfNeeded(
   sessionId: number,
   headless: boolean = true,
 ): Promise<boolean> {
-  const session = db.getSessionById(sessionId) as
-    { environment: string; session_cookies: string } | undefined;
-  if (!session) return false;
+  try {
+    const session = db.getSessionById(sessionId) as
+      { environment: string; session_cookies: string } | undefined;
+    if (!session) return false;
 
-  const env = eb.getEnvironment(session.environment);
-  const cookies = JSON.parse(session.session_cookies);
+    const env = eb.getEnvironment(session.environment);
+    const cookies = JSON.parse(session.session_cookies);
 
-  const loginCheck = await eb.isLoggedIn(env, headless, cookies);
-  if (loginCheck.isLoggedIn) {
-    db.updateSessionCookies(sessionId, JSON.stringify(loginCheck.newCookies));
-    return true;
+    const loginCheck = await eb.isLoggedIn(env, headless, cookies);
+    if (loginCheck.isLoggedIn) {
+      db.updateSessionCookies(sessionId, JSON.stringify(loginCheck.newCookies));
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
-  return false;
 }
 
 export interface ImportOptions {

@@ -27,6 +27,17 @@ export default class Login extends Command {
     'sso-url': Flags.string({
       description: 'SSO entry URL; opens a browser for interactive provider authentication',
     }),
+    provider: Flags.string({
+      description: 'Credential manager provider (1password, bitwarden, keychain, env)',
+      options: ['1password', 'bitwarden', 'keychain', 'env'],
+    }),
+    item: Flags.string({
+      description:
+        'Item name, title, or reference in the credential manager (default: "e-Builder")',
+    }),
+    vault: Flags.string({
+      description: '1Password vault name or ID',
+    }),
   };
   static override aliases: string[] = ['session:create'];
 
@@ -40,6 +51,7 @@ export default class Login extends Command {
       account?: string;
       environment?: string;
       ssoUrl?: string;
+      getTotp?: () => Promise<string | undefined>;
     } = {};
     if (flags.show_browser !== undefined) options.showBrowser = flags.show_browser;
     if (flags.username) options.username = flags.username;
@@ -48,7 +60,39 @@ export default class Login extends Command {
     if (flags.environment) options.environment = flags.environment;
     if (flags['sso-url']) options.ssoUrl = flags['sso-url'];
 
+    let itemRef: string | undefined;
+    if (flags.provider) {
+      const { CredentialResolver } = await import('../lib/credentials/resolver.js');
+      itemRef = flags.item || 'e-Builder';
+      const creds = await CredentialResolver.resolve({
+        provider: flags.provider as any,
+        itemRef,
+        vault: flags.vault,
+      });
+      if (creds.username && !options.username) options.username = creds.username;
+      if (creds.password && !options.password) options.password = creds.password;
+      if (creds.account && !options.account) options.account = creds.account;
+      if (creds.environment && !options.environment) options.environment = creds.environment;
+
+      options.getTotp = async () => {
+        return CredentialResolver.getLiveTotp({
+          provider: flags.provider as any,
+          itemRef: itemRef!,
+          vault: flags.vault,
+        });
+      };
+    }
+
     await promptLoginAndSaveSession(options);
+
+    if (flags.provider && itemRef) {
+      const db = await import('../lib/db.js');
+      const allSessions = db.getSessions();
+      if (allSessions.length > 0) {
+        const latest = [...allSessions].sort((a, b) => b.id - a.id)[0]!;
+        db.setCredentialRef(latest.id, flags.provider, itemRef, flags.vault);
+      }
+    }
 
     this.log(`Session saved!`);
   }

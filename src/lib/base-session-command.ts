@@ -27,9 +27,23 @@ export abstract class BaseSessionCommand extends Command {
   };
 
   /**
+   * Determine if the command is running interactively.
+   * If non-TTY or --json is passed, the command operates non-interactively without prompting.
+   */
+  protected isInteractive(): boolean {
+    let hasJsonFlag = false;
+    try {
+      hasJsonFlag = typeof this.jsonEnabled === 'function' ? this.jsonEnabled() : false;
+    } catch {
+      hasJsonFlag = false;
+    }
+    return Boolean(process.stdout.isTTY && !hasJsonFlag);
+  }
+
+  /**
    * Resolve and return a session based on flags or user selection.
    * Handles session lookup by ID, username, or interactive selection.
-   * Will prompt for login if no sessions exist.
+   * Will prompt for login if no sessions exist (in interactive mode).
    *
    * @param flags - Command flags containing session-id, username, and show-browser
    * @returns The resolved SessionRow
@@ -53,7 +67,11 @@ export abstract class BaseSessionCommand extends Command {
       } else if (sessions.length === 1) {
         session = sessions[0];
       } else {
-        session = await this.selectSession(sessions);
+        if (!this.isInteractive()) {
+          session = [...sessions].sort((a, b) => b.id - a.id)[0];
+        } else {
+          session = await this.selectSession(sessions);
+        }
       }
     } else {
       session = await this.getOrCreateSession(flags['show-browser']);
@@ -85,7 +103,7 @@ export abstract class BaseSessionCommand extends Command {
 
   /**
    * Get an existing session or prompt user to login if none exist.
-   * If multiple sessions exist, prompts user to select one.
+   * If multiple sessions exist, prompts user to select one (or picks latest non-interactively).
    *
    * @param showBrowser - Whether to show the browser during login
    * @returns The selected or newly created SessionRow
@@ -94,6 +112,11 @@ export abstract class BaseSessionCommand extends Command {
     const allSessions = db.getSessions() as SessionRow[];
 
     if (allSessions.length === 0) {
+      if (!this.isInteractive()) {
+        this.error(
+          "No active e-Builder sessions found. Please authenticate first using 'eb session import' or 'eb login'.",
+        );
+      }
       this.log('No open sessions found. Please log in first.');
       await promptLoginAndSaveSession({ showBrowser: showBrowser ?? false });
       const newSessions = db.getSessions() as SessionRow[];
@@ -103,7 +126,15 @@ export abstract class BaseSessionCommand extends Command {
       return newSessions.length === 1 ? newSessions[0]! : await this.selectSession(newSessions);
     }
 
-    return allSessions.length === 1 ? allSessions[0]! : await this.selectSession(allSessions);
+    if (allSessions.length === 1) {
+      return allSessions[0]!;
+    }
+
+    if (!this.isInteractive()) {
+      return [...allSessions].sort((a, b) => b.id - a.id)[0]!;
+    }
+
+    return await this.selectSession(allSessions);
   }
 
   /**
@@ -116,6 +147,35 @@ export abstract class BaseSessionCommand extends Command {
    */
   protected async getSessionCookies(sessionId: number, headless: boolean = true): Promise<any[]> {
     if (!(await refreshSessionIfNeeded(sessionId, headless))) {
+      // Check if we have an autonomous credential reference (1password, bitwarden, etc.)
+      const credRef = db.getCredentialRef(sessionId);
+      if (credRef) {
+        const session = db.getSessionById(sessionId) as SessionRow | undefined;
+        if (session) {
+          try {
+            const { CredentialResolver } = await import('./credentials/resolver.js');
+            const creds = await CredentialResolver.resolve({
+              provider: credRef.provider as any,
+              itemRef: credRef.item_ref,
+              vault: credRef.vault ?? undefined,
+            });
+            const env = eb.getEnvironment(session.environment);
+            const newCookies = await this.performLogin(
+              env,
+              headless,
+              creds.username || session.username,
+              creds.password,
+              creds.account || session.account,
+            );
+            if (newCookies && newCookies.length > 0) {
+              db.updateSessionCookies(sessionId, JSON.stringify(newCookies));
+              return newCookies;
+            }
+          } catch {
+            // Fall through to error
+          }
+        }
+      }
       this.error("Session has expired. Please log in again using 'eb login'.");
     }
     const session = db.getSessionById(sessionId) as SessionRow;
@@ -135,5 +195,18 @@ export abstract class BaseSessionCommand extends Command {
     headless: boolean = true,
   ): Promise<any[]> {
     return await this.getSessionCookies(sessionId, headless);
+  }
+
+  /**
+   * Performs authentication to retrieve fresh cookies. Can be overridden in tests.
+   */
+  protected async performLogin(
+    env: eb.Environment,
+    headless: boolean,
+    username?: string,
+    password?: string,
+    account?: string,
+  ): Promise<any[]> {
+    return await eb.login(env, headless, username, password, account);
   }
 }

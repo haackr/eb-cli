@@ -107,6 +107,23 @@ describe('BaseSessionCommand (src/lib/base-session-command.ts)', () => {
       assert.ok(session);
       assert.strictEqual(session.username, 'onlyone@example.com');
     });
+
+    it('auto-selects the latest session non-interactively when multiple sessions exist', async () => {
+      db.addSession('first@example.com', 'us1', 'Acct1', '[]');
+      db.addSession('second@example.com', 'us2', 'Acct2', '[]');
+
+      const session = await cmd.publicGetSession({});
+      assert.ok(session);
+      assert.strictEqual(session.username, 'second@example.com');
+      assert.strictEqual(session.id, 2);
+    });
+
+    it('throws helpful error non-interactively when no sessions exist', async () => {
+      await assert.rejects(
+        async () => cmd.publicGetSession({}),
+        /CLI Error: No active e-Builder sessions found. Please authenticate first using 'eb session import' or 'eb login'./,
+      );
+    });
   });
 
   describe('getSessionCookies and refreshSessionCookies', () => {

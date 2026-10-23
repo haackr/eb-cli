@@ -67,6 +67,40 @@ function getChromeDependencyHint(): string {
   return ' If this Linux environment allows package installs, rerun with EB_PUPPETEER_INSTALL_DEPS=1 to let Puppeteer install Chrome system dependencies, or install the required libraries manually.';
 }
 
+function get1PasswordExtensionDir(): string | undefined {
+  let chromeDataDir: string;
+  if (process.platform === 'darwin') {
+    chromeDataDir = path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome');
+  } else if (process.platform === 'win32') {
+    chromeDataDir = path.join(
+      process.env['LOCALAPPDATA'] || path.join(os.homedir(), 'AppData', 'Local'),
+      'Google',
+      'Chrome',
+      'User Data',
+    );
+  } else {
+    chromeDataDir = path.join(
+      process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config'),
+      'google-chrome',
+    );
+  }
+
+  const extBase = path.join(
+    chromeDataDir,
+    'Default',
+    'Extensions',
+    'aeblfdkhhhdcdjpifhhbdiojplfjncoa',
+  );
+  if (fs.existsSync(extBase)) {
+    const versions = fs.readdirSync(extBase).filter((f) => !f.startsWith('.'));
+    if (versions.length > 0) {
+      const latest = versions.sort().reverse()[0]!;
+      return path.join(extBase, latest);
+    }
+  }
+  return undefined;
+}
+
 export class BrowserManager {
   private static instance: BrowserManager;
   private browser: puppeteer.Browser | null = null;
@@ -150,6 +184,14 @@ export class BrowserManager {
       this.currentHeadless = headless;
       const requiredArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
       const launchArgs = [...new Set([...(args ?? []), ...requiredArgs])];
+
+      const extDir = !headless ? get1PasswordExtensionDir() : undefined;
+      const ignoreDefaults: string[] = ['--enable-automation'];
+      if (extDir) {
+        launchArgs.push(`--load-extension=${extDir}`, `--disable-extensions-except=${extDir}`);
+        ignoreDefaults.push('--disable-extensions');
+      }
+
       try {
         if (useUserChrome) {
           const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eb-sso-login-browser'));
@@ -165,7 +207,7 @@ export class BrowserManager {
           this.browser = await puppeteer.launch({
             headless,
             channel: 'chrome',
-            ignoreDefaultArgs: ['--enable-automation'],
+            ignoreDefaultArgs: ignoreDefaults,
             args: newLaunchArgs,
           });
           this.browser.on('disconnected', () => {
@@ -176,10 +218,15 @@ export class BrowserManager {
             } catch {}
           });
         } else {
-          this.browser = await puppeteer.launch({
+          const launchOpts: puppeteer.LaunchOptions = {
             headless,
             args: launchArgs,
-          });
+          };
+          if (extDir) {
+            launchOpts.channel = 'chrome';
+            launchOpts.ignoreDefaultArgs = ignoreDefaults;
+          }
+          this.browser = await puppeteer.launch(launchOpts);
         }
       } catch (launchError) {
         console.log('Puppeteer failed to launch browser. Attempting to install Chrome...');
