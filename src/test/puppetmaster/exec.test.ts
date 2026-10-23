@@ -127,5 +127,168 @@ describe('Session Exec Operations (src/lib/eb-puppetmaster/exec.ts)', () => {
         suffix: 'ok',
       });
     });
+
+    it('inspects page controls, forms, RadComboBoxes, and tables with inspect: true', async () => {
+      const mockHtml = `
+        <!DOCTYPE html>
+        <html>
+          <head><title>Process Start</title></head>
+          <body>
+            <div class="breadcrumb"><span>Processes</span> &gt; <span>Start</span></div>
+            <div class="errorMessage">Please correct errors below.</div>
+            <form action="post.aspx">
+              <label for="tbProject">Project Name *</label>
+              <input type="text" id="tbProject" name="ProjectName" value="Capital Project Alpha" required />
+
+              <label for="taDesc">Description</label>
+              <textarea id="taDesc" name="Desc">Sample description</textarea>
+
+              <label for="selType">Type</label>
+              <select id="selType" name="Type">
+                <option value="1" selected>Type 1</option>
+                <option value="2">Type 2</option>
+              </select>
+
+              <div id="ctl00_rcbVendor" class="RadComboBox">
+                <label for="ctl00_rcbVendor">Vendor</label>
+                <input class="rcbInput" value="Acme Corp" />
+                <input type="hidden" id="ctl00_rcbVendor_Value" name="ctl00_rcbVendor_Value" value="V-100" />
+              </div>
+              <div id="ctl00_rcbVendor_DropDown">
+                <ul>
+                  <li class="rcbItem" data-value="V-100">Acme Corp</li>
+                  <li class="rcbItem" data-value="V-200">Beta LLC</li>
+                </ul>
+              </div>
+
+              <input type="submit" id="btnSubmit" value="Submit Form" />
+            </form>
+
+            <table id="itemsGrid" class="rgMasterTable">
+              <thead>
+                <tr><th>Item ID</th><th>Cost</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>ITEM-1</td><td>$100.00</td></tr>
+                <tr><td>ITEM-2</td><td>$250.00</td></tr>
+              </tbody>
+            </table>
+          </body>
+        </html>
+      `;
+
+      const dataUrl = 'data:text/html,' + encodeURIComponent(mockHtml);
+
+      const inspectResult = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url: dataUrl,
+        inspect: true,
+      });
+
+      assert.ok(inspectResult.inspection);
+      const insp = inspectResult.inspection;
+
+      assert.strictEqual(insp.title, 'Process Start');
+      assert.deepStrictEqual(insp.alerts, ['Please correct errors below.']);
+      assert.ok(insp.breadcrumbs.length > 0);
+
+      // Check fields
+      const projectField = insp.fields.find((f) => f.name === 'ProjectName');
+      assert.ok(projectField);
+      assert.strictEqual(projectField?.value, 'Capital Project Alpha');
+      assert.strictEqual(projectField?.required, true);
+
+      const vendorField = insp.fields.find((f) => f.id === 'ctl00_rcbVendor');
+      assert.ok(vendorField);
+      assert.strictEqual(vendorField?.type, 'radcombobox');
+      assert.strictEqual(vendorField?.value, 'V-100');
+      assert.strictEqual(vendorField?.options?.length, 2);
+
+      // Check actions
+      const submitAction = insp.actions.find((a) => a.id === 'btnSubmit');
+      assert.ok(submitAction);
+      assert.strictEqual(submitAction?.text, 'Submit Form');
+
+      // Check tables
+      assert.strictEqual(insp.tables.length, 1);
+      assert.deepStrictEqual(insp.tables[0]?.headers, ['Item ID', 'Cost']);
+      assert.strictEqual(insp.tables[0]?.rowCount, 2);
+      assert.deepStrictEqual(insp.tables[0]?.sampleRows[0], {
+        'Item ID': 'ITEM-1',
+        Cost: '$100.00',
+      });
+    });
+
+    it('injects in-browser eb helper enabling concise DOM navigation and control queries', async () => {
+      const mockHtml = `
+        <!DOCTYPE html>
+        <html>
+          <head><title>Helper Test</title></head>
+          <body>
+            <label for="ctl00_ctl00_tbTitle">Title</label>
+            <input type="text" id="ctl00_ctl00_tbTitle" value="Helper Works" />
+            <table id="testTable">
+              <thead><tr><th>A</th><th>B</th></tr></thead>
+              <tbody><tr><td>1</td><td>2</td></tr></tbody>
+            </table>
+          </body>
+        </html>
+      `;
+      const dataUrl = 'data:text/html,' + encodeURIComponent(mockHtml);
+
+      const result = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url: dataUrl,
+        script: `(arg, eb) => {
+          const field = eb.findField('Title');
+          const table = eb.getTable('#testTable');
+          return {
+            fieldVal: field ? field.value : null,
+            tableData: table
+          };
+        }`,
+      });
+
+      assert.deepStrictEqual(result.result, {
+        fieldVal: 'Helper Works',
+        tableData: {
+          headers: ['A', 'B'],
+          rowCount: 1,
+          rows: [{ A: '1', B: '2' }],
+        },
+      });
+    });
+
+    it('captures failure diagnostics with ExecuteInSessionError', async () => {
+      const dataUrl =
+        'data:text/html,' +
+        encodeURIComponent(
+          '<!DOCTYPE html><html><head><title>Error Page</title></head><body>Fail</body></html>',
+        );
+
+      await assert.rejects(
+        async () => {
+          await executeInSession({
+            env: Environment.US1,
+            cookies: [],
+            browser,
+            url: dataUrl,
+            script: `() => { throw new Error('Simulated DOM failure'); }`,
+            screenshotOnFailure: true,
+          });
+        },
+        (err: any) => {
+          assert.strictEqual(err.name, 'ExecuteInSessionError');
+          assert.match(err.message, /Simulated DOM failure/);
+          assert.strictEqual(err.title, 'Error Page');
+          assert.ok(err.screenshotPath);
+          return true;
+        },
+      );
+    });
   });
 });

@@ -63,26 +63,40 @@ export default class SessionExec extends BaseSessionCommand {
     screenshot: Flags.string({
       description: 'Save a full-page PNG screenshot to this file path after execution',
     }),
+    'screenshot-on-failure': Flags.boolean({
+      description: 'Capture screenshot on execution or wait-for error (default: true)',
+      default: true,
+      allowNo: true,
+    }),
+    inspect: Flags.boolean({
+      char: 'i',
+      description:
+        'Inspect and extract page structure (forms, fields, buttons, tables) into structured JSON AST',
+      default: false,
+    }),
   };
 
   public async run(): Promise<unknown> {
     const { args, flags } = await this.parse(SessionExec);
 
-    let scriptContent: string | undefined = flags.eval;
-    if (flags['script-file']) {
-      if (!fs.existsSync(flags['script-file'])) {
-        this.error(`Script file not found: ${flags['script-file']}`);
-      }
-      scriptContent = fs.readFileSync(flags['script-file'], 'utf8');
-    }
-
-    const headless = !flags['show-browser'];
-    const session = await this.getSession(flags);
-    const env = eb.getEnvironment(session.environment);
-    const cookies = await this.getSessionCookies(session.id, headless);
-    const parsedArg = parseArgValue(flags.arg);
+    let session: any;
+    let env: eb.Environment | undefined;
 
     try {
+      let scriptContent: string | undefined = flags.eval;
+      if (flags['script-file']) {
+        if (!fs.existsSync(flags['script-file'])) {
+          this.error(`Script file not found: ${flags['script-file']}`);
+        }
+        scriptContent = fs.readFileSync(flags['script-file'], 'utf8');
+      }
+
+      const headless = !flags['show-browser'];
+      session = await this.getSession(flags);
+      env = eb.getEnvironment(session.environment);
+      const cookies = await this.getSessionCookies(session.id, headless);
+      const parsedArg = parseArgValue(flags.arg);
+
       const execResult = await eb.executeInSession({
         env,
         cookies,
@@ -93,6 +107,8 @@ export default class SessionExec extends BaseSessionCommand {
         mode: flags.puppeteer ? 'puppeteer' : 'dom',
         arg: parsedArg,
         screenshotPath: flags.screenshot,
+        screenshotOnFailure: flags['screenshot-on-failure'],
+        inspect: flags.inspect,
       });
 
       if (execResult.cookies && execResult.cookies.length > 0) {
@@ -100,6 +116,7 @@ export default class SessionExec extends BaseSessionCommand {
       }
 
       const payload = {
+        success: true,
         session: {
           id: session.id,
           username: session.username,
@@ -111,6 +128,7 @@ export default class SessionExec extends BaseSessionCommand {
         title: execResult.title,
         frameUrl: execResult.frameUrl,
         screenshotPath: execResult.screenshotPath,
+        inspection: execResult.inspection,
         result: execResult.result,
       };
 
@@ -118,13 +136,40 @@ export default class SessionExec extends BaseSessionCommand {
         return payload;
       }
 
-      if (typeof execResult.result === 'string') {
+      if (flags.inspect && execResult.inspection) {
+        this.log(JSON.stringify(execResult.inspection, null, 2));
+      } else if (typeof execResult.result === 'string') {
         this.log(execResult.result);
       } else {
         this.log(JSON.stringify(execResult.result, null, 2));
       }
 
       return payload;
+    } catch (err: any) {
+      if (this.jsonEnabled()) {
+        return {
+          success: false,
+          error: {
+            code: err.code || err.name || 'EXECUTION_FAILED',
+            message: err.message || 'Execution in session failed',
+            stack: err.stack,
+          },
+          session: session
+            ? {
+                id: session.id,
+                username: session.username,
+                environment: session.environment,
+                origin: env ? `https://${env}.${eb.baseurl}` : undefined,
+                account: session.account,
+              }
+            : undefined,
+          url: err.url || (args.url && env ? eb.resolveSessionUrl(env, args.url) : undefined),
+          title: err.title || '',
+          frameUrl: err.frameUrl || null,
+          screenshotPath: err.screenshotPath || null,
+        };
+      }
+      throw err;
     } finally {
       await eb.BrowserManager.getInstance().closeBrowser();
     }

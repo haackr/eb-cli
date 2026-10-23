@@ -134,6 +134,40 @@ describe('Session Commands (src/commands/session/)', () => {
       const sessions = db.getSessions();
       assert.strictEqual(sessions.length, 0);
     });
+
+    it('returns structured JSON array and retains sessions when --no-delete is passed', async () => {
+      db.addSession('retained@example.com', 'us1', 'Acct1', '[]');
+
+      const mockBrowser: any = {
+        connected: true,
+        createBrowserContext: async () => ({
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            goto: async () => {},
+            waitForSelector: async () => {
+              throw new Error('Timeout');
+            },
+          }),
+          setCookie: async () => {},
+          cookies: async () => [],
+          close: async () => {},
+        }),
+      };
+
+      eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+
+      const results: any = await SessionTest.run(['--json', '--no-delete']);
+
+      assert.ok(Array.isArray(results));
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].username, 'retained@example.com');
+      assert.strictEqual(results[0].valid, false);
+      assert.strictEqual(results[0].deleted, false);
+
+      const sessions = db.getSessions();
+      assert.strictEqual(sessions.length, 1);
+    });
   });
 
   describe('Logout', () => {
@@ -250,6 +284,96 @@ describe('Session Commands (src/commands/session/)', () => {
       assert.deepStrictEqual(JSON.parse(updatedSession!.session_cookies), [
         { name: 'sid', value: 'updated_cookie' },
       ]);
+    });
+
+    it('returns structured inspection AST when --inspect is passed with --json', async () => {
+      db.addSession('inspect_user@example.com', 'us1', 'Acct', '[]');
+
+      const mockBrowser: any = {
+        connected: true,
+        createBrowserContext: async () => ({
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            goto: async () => {},
+            url: () => 'https://app.e-builder.net/da2/Home/index2.aspx',
+            title: async () => 'Home',
+            waitForSelector: async () => ({}),
+            waitForFunction: async () => ({}),
+            waitForNetworkIdle: async () => ({}),
+            evaluate: async (fn: any) => {
+              const fnStr = String(fn);
+              if (fnStr.includes('innerHref')) {
+                return { docTitle: 'Home', innerHref: null };
+              }
+              // Return inspection AST
+              return {
+                title: 'Home',
+                url: 'https://app.e-builder.net/da2/Home/index2.aspx',
+                breadcrumbs: ['Home'],
+                fields: [{ name: 'search', type: 'text', label: 'Search' }],
+                actions: [{ text: 'Go', type: 'submit' }],
+                tables: [],
+                alerts: [],
+              };
+            },
+            close: async () => {},
+          }),
+          setCookie: async () => {},
+          cookies: async () => [],
+          close: async () => {},
+        }),
+      };
+
+      eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+
+      const result: any = await SessionExec.run(['/da2/Home/index2.aspx', '--inspect', '--json']);
+
+      assert.strictEqual(result.success, true);
+      assert.ok(result.inspection);
+      assert.strictEqual(result.inspection.title, 'Home');
+      assert.strictEqual(result.inspection.fields[0].name, 'search');
+    });
+
+    it('returns structured failure payload on error instead of unhandled crash when --json is passed', async () => {
+      db.addSession(
+        'err_user@example.com',
+        'us1',
+        'Acct',
+        JSON.stringify([{ name: 'sid', value: '123' }]),
+      );
+
+      const mockBrowser: any = {
+        connected: true,
+        createBrowserContext: async () => ({
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            goto: async (url: string) => {
+              if (url.includes('bad-page')) {
+                throw new Error('Navigation failed: timeout 30000ms');
+              }
+            },
+            waitForSelector: async () => ({}),
+            waitForFunction: async () => ({}),
+            waitForNetworkIdle: async () => ({}),
+            url: () => 'https://app.e-builder.net/bad-page',
+            title: async () => 'Error',
+            close: async () => {},
+          }),
+          setCookie: async () => {},
+          cookies: async () => [{ name: 'sid', value: '123' }],
+          close: async () => {},
+        }),
+      };
+
+      eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+
+      const result: any = await SessionExec.run(['/bad-page', '--json']);
+
+      assert.strictEqual(result.success, false);
+      assert.ok(result.error);
+      assert.match(result.error.message, /Navigation failed/);
     });
   });
 });
