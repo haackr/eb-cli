@@ -1,4 +1,3 @@
-import puppeteer from 'puppeteer';
 import * as path from 'path';
 import * as os from 'os';
 import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';

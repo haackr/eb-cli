@@ -1,4 +1,3 @@
-import puppeteer from 'puppeteer';
 import { Environment, baseurl } from './index.js';
 
 const projectListPath = '/da2/Projects/ProjectList.aspx';

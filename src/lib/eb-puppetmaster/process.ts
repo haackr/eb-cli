@@ -1,4 +1,3 @@
-import puppeteer from 'puppeteer';
 import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';
 
 type SetProcessInstanceNullFieldsArgs = {

@@ -1,4 +1,3 @@
-import puppeteer from 'puppeteer';
 import { Environment, baseurl, BrowserManager, optimizePageForAutomation } from './index.js';
 import { getPortalIdByProjectName } from './project.js';
 

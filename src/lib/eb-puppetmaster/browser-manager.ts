@@ -12,7 +12,22 @@ const require = createRequire(import.meta.url);
 function getPuppeteerCliPath(): string {
   const puppeteerPackageJsonPath = require.resolve('puppeteer/package.json');
   const puppeteerDir = dirname(puppeteerPackageJsonPath);
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(puppeteerPackageJsonPath, 'utf8'));
+    const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.puppeteer;
+    if (binRel) {
+      const candidate = join(puppeteerDir, binRel);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  } catch {
+    // fallback to candidate list below
+  }
+
   const cliCandidates = [
+    join(puppeteerDir, 'lib', 'puppeteer', 'node', 'cli.js'),
     join(puppeteerDir, 'lib', 'cjs', 'puppeteer', 'node', 'cli.js'),
     join(puppeteerDir, 'lib', 'esm', 'puppeteer', 'node', 'cli.js'),
   ];

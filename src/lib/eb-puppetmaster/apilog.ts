@@ -1,4 +1,3 @@
-import puppeteer from 'puppeteer';
 import { BrowserManager, Environment, baseurl, optimizePageForAutomation } from './index.js';
 
 export type ApiLogSummary = {
@@ -165,7 +164,7 @@ export async function applyDateFilter(
     const fromEl = await page.$(fromDateInputSelector).catch(() => null);
     if (fromEl && typeof fromEl.click === 'function' && typeof fromEl.type === 'function') {
       try {
-        await fromEl.click({ clickCount: 3 });
+        await fromEl.click({ count: 3 });
         await fromEl.type(fromDate);
       } catch {}
     }
@@ -173,7 +172,7 @@ export async function applyDateFilter(
     const toEl = await page.$(toDateInputSelector).catch(() => null);
     if (toEl && typeof toEl.click === 'function' && typeof toEl.type === 'function') {
       try {
-        await toEl.click({ clickCount: 3 });
+        await toEl.click({ count: 3 });
         await toEl.type(toDate);
       } catch {}
     }
