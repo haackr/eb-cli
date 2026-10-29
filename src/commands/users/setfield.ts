@@ -52,7 +52,11 @@ function parseOperations(rows: UserSetFieldCsvRow[]): UserSetFieldOperation[] {
         continue;
       }
 
-      fieldValues[key] = trimmedValue;
+      if (['[clear]', '[blank]', '[empty]', '[null]'].includes(trimmedValue.toLowerCase())) {
+        fieldValues[key] = '';
+      } else {
+        fieldValues[key] = trimmedValue;
+      }
     }
 
     if (Object.keys(fieldValues).length === 0) {

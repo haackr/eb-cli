@@ -201,10 +201,8 @@ export async function removeUserFromProjectRoleByName(
     if (!roleLink) throw new Error(`Role '${roleName}' not found in project '${projectName}'`);
 
     // Click role link and wait for the right pane iframe to reload with users
-    await Promise.all([
-      page.waitForNetworkIdle({ idleTime: 500, timeout: 15_000 }).catch(() => null),
-      roleLink.click(),
-    ]);
+    await roleLink.click();
+    await new Promise((r) => setTimeout(r, 1500));
 
     // 4. Helper to get the user list iframe
     async function getUserFrame(): Promise<puppeteer.Frame> {
@@ -248,10 +246,8 @@ export async function removeUserFromProjectRoleByName(
             throw new Error('Remove button not found in user list iframe');
           }
 
-          await Promise.all([
-            page.waitForNetworkIdle({ idleTime: 500, timeout: 20_000 }).catch(() => null),
-            removeBtn.click(),
-          ]);
+          await removeBtn.click();
+          await new Promise((r) => setTimeout(r, 1800));
 
           userFrame = await getUserFrame();
           await userFrame

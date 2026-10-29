@@ -69,37 +69,90 @@ export async function removeUserFromProjectByName(
 
     // 2. Navigate to the project participants page
     const projectParticipantsUrl = `https://${env}.${baseurl}/da2/Projects/ProjectParticipants.aspx?PortalID={${portalId}}`;
-    await page.goto(projectParticipantsUrl, { waitUntil: 'networkidle0' });
+    await page.goto(projectParticipantsUrl, { waitUntil: 'domcontentloaded' });
+    await new Promise((r) => setTimeout(r, 2000));
 
-    // 3. Get the user list iframe
-    const userListFrameEl = await page.waitForSelector(
-      'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList',
-    );
-    if (!userListFrameEl) throw new Error('User list iframe not found');
-    const userFrame = await userListFrameEl.contentFrame();
-    if (!userFrame) throw new Error('Could not access user list iframe content');
+    // 3. Helper to get the user list iframe
+    async function getUserFrame(): Promise<puppeteer.Frame> {
+      const userListFrameEl = await page!.waitForSelector(
+        'iframe#RAD_SPLITTER_PANE_EXT_CONTENT_ctl00_ctl00_ContentPlaceHolder1_contentSection_userList, iframe[name*="userList"]',
+        { timeout: 30_000 },
+      );
+      if (!userListFrameEl) throw new Error('User list iframe not found');
+      const uFrame = await userListFrameEl.contentFrame();
+      if (!uFrame) throw new Error('Could not access user list iframe content');
+      return uFrame;
+    }
 
-    await userFrame.waitForSelector('#grdResults');
+    page.on('dialog', async (dialog) => {
+      try {
+        await dialog.accept();
+      } catch {}
+    });
 
-    // 4. Select checkboxes for matching users from the current (non-paginated) grid.
+    let userFrame = await getUserFrame();
+    await userFrame.waitForSelector('#grdResults, table', { timeout: 30_000 });
+
+    // 4. Select checkboxes for matching users across grid pages.
     const requestedByKey = new Map<string, string>();
     for (const userName of userNames) {
       const key = userName.trim().toLowerCase();
       if (!requestedByKey.has(key)) requestedByKey.set(key, userName);
     }
 
-    const matchedKeys = new Set(
-      await selectUsersInProjectGrid(userFrame, Array.from(requestedByKey.keys())),
-    );
+    const matchedKeys = new Set<string>();
+    const remainingKeys = () =>
+      Array.from(requestedByKey.keys()).filter((k) => !matchedKeys.has(k));
 
-    // 5. Click remove once for all selected users (if not dry-run) and accept confirmation.
-    if (!dryRun && matchedKeys.size > 0) {
-      const removeBtn = await userFrame.waitForSelector('#btnRemove');
-      if (!removeBtn) throw new Error('Remove from Project button not found');
-      page.once('dialog', (dialog) => dialog.accept());
-      await removeBtn.click();
-      await page.waitForNetworkIdle();
-      await userFrame.waitForSelector('#grdResults');
+    while (true) {
+      userFrame = await getUserFrame();
+      const currentMatched = await selectUsersInProjectGrid(userFrame, remainingKeys());
+      if (currentMatched.length > 0) {
+        for (const k of currentMatched) matchedKeys.add(k);
+
+        if (!dryRun) {
+          const removeBtn = await userFrame.waitForSelector('#btnRemove');
+          if (!removeBtn) throw new Error('Remove from Project button not found');
+          await removeBtn.click();
+          await new Promise((r) => setTimeout(r, 2000));
+          userFrame = await getUserFrame();
+          await userFrame
+            .waitForSelector('#grdResults, table', { timeout: 20_000 })
+            .catch(() => null);
+          if (remainingKeys().length > 0) {
+            continue;
+          }
+        }
+      }
+
+      if (remainingKeys().length === 0) break;
+
+      const nextGridLink = await userFrame.evaluateHandle(() => {
+        const pagingRow = document.querySelector('#grdResults tr.Paging, tr.Paging');
+        if (!pagingRow) return null;
+        const currentSpan = pagingRow.querySelector('span');
+        const currentPageNum = currentSpan
+          ? parseInt(currentSpan.textContent?.trim() || '1', 10)
+          : 1;
+        const targetPageNum = String(currentPageNum + 1);
+        const links = Array.from(pagingRow.querySelectorAll('a'));
+        return (
+          links.find((a) => a.textContent?.trim() === targetPageNum) ||
+          links.find((a) => (a.textContent ?? '').toLowerCase().includes('next')) ||
+          null
+        );
+      });
+
+      const nextLinkEl = nextGridLink.asElement();
+      if (!nextLinkEl) break;
+
+      await Promise.all([
+        page.waitForNetworkIdle({ idleTime: 500, timeout: 15_000 }).catch(() => null),
+        (nextLinkEl as puppeteer.ElementHandle<HTMLElement>).click(),
+      ]);
+
+      userFrame = await getUserFrame();
+      await userFrame.waitForSelector('#grdResults, table', { timeout: 15_000 });
     }
 
     const notFound: string[] = [];
