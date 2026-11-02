@@ -52,7 +52,9 @@ export default class McpCommand extends Command {
           .boolean()
           .optional()
           .default(false)
-          .describe('Whether to delete invalid sessions (defaults to false)'),
+          .describe(
+            'Delete sessions redirected to a login page (defaults to false). Network, timeout, and server errors never delete.',
+          ),
       },
       async ({ username, deleteInvalid }) => {
         let sessions: db.SessionRow[];
@@ -66,52 +68,55 @@ export default class McpCommand extends Command {
         for (const session of sessions) {
           const env = eb.getEnvironment(session.environment);
           const cookies = JSON.parse(session.session_cookies);
+          const base = {
+            id: session.id,
+            username: session.username,
+            environment: session.environment,
+            account: session.account,
+          };
+          let check: eb.SessionCheckResult;
           try {
-            const { isLoggedIn, newCookies } = await eb.isLoggedIn(env, true, cookies);
-            if (isLoggedIn) {
-              db.updateSessionById(
-                session.id,
-                session.username,
-                session.environment,
-                session.account,
-                JSON.stringify(newCookies),
-              );
-              results.push({
-                id: session.id,
-                username: session.username,
-                environment: session.environment,
-                account: session.account,
-                valid: true,
-                refreshed: true,
-                deleted: false,
-              });
-            } else {
-              if (deleteInvalid) {
-                db.deleteSessionById(session.id);
-              }
-              results.push({
-                id: session.id,
-                username: session.username,
-                environment: session.environment,
-                account: session.account,
-                valid: false,
-                refreshed: false,
-                deleted: Boolean(deleteInvalid),
-                error: 'Session invalid or cookies expired',
-              });
-            }
+            check = await eb.isLoggedIn(env, true, cookies);
           } catch (err: any) {
-            results.push({
-              id: session.id,
-              username: session.username,
-              environment: session.environment,
-              account: session.account,
-              valid: false,
-              refreshed: false,
-              deleted: false,
-              error: err.message,
-            });
+            check = {
+              isLoggedIn: false,
+              reason: eb.classifyNavigationError(err) ?? 'unknown',
+              errorMessage: err?.message,
+              newCookies: [],
+            };
           }
+
+          if (check.isLoggedIn) {
+            db.updateSessionById(
+              session.id,
+              session.username,
+              session.environment,
+              session.account,
+              JSON.stringify(check.newCookies),
+            );
+            results.push({
+              ...base,
+              valid: true,
+              refreshed: true,
+              deleted: false,
+              reason: check.reason,
+            });
+            continue;
+          }
+
+          // Only a real redirect to a login page proves the cookies are dead.
+          const shouldDelete = Boolean(deleteInvalid) && check.reason === 'redirected_to_login';
+          if (shouldDelete) {
+            db.deleteSessionById(session.id);
+          }
+          results.push({
+            ...base,
+            valid: false,
+            refreshed: false,
+            deleted: shouldDelete,
+            reason: check.reason,
+            error: eb.sessionCheckErrorFor(check, `https://${env}.${eb.baseurl}`).message,
+          });
         }
 
         await eb.BrowserManager.getInstance().closeBrowser();
@@ -555,11 +560,10 @@ function resolveMcpSession(sessionId?: number, username?: string): db.SessionRow
 }
 
 async function getMcpSessionCookies(session: db.SessionRow): Promise<any[]> {
-  const refreshed = await refreshSessionIfNeeded(session.id, true);
-  if (!refreshed) {
-    throw new Error(
-      `Session ${session.id} (${session.username}) has expired. Please re-authenticate using 'eb login' or 'eb session import'.`,
-    );
+  const check = await refreshSessionIfNeeded(session.id, true);
+  if (!check.isLoggedIn) {
+    const origin = `https://${eb.getEnvironment(session.environment)}.${eb.baseurl}`;
+    throw eb.sessionCheckErrorFor(check, origin);
   }
   const updated = db.getSessionById(session.id) as db.SessionRow;
   return JSON.parse(updated.session_cookies);

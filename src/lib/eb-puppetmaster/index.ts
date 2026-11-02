@@ -8,6 +8,7 @@ export * from './remove-project.js';
 export * from './project.js';
 export * from './process.js';
 export * from './exec.js';
+export * from './session-check.js';
 
 export enum Environment {
   US1 = 'app',

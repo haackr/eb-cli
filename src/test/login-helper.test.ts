@@ -32,7 +32,8 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
   describe('refreshSessionIfNeeded', () => {
     it('returns false when session is not in the database', async () => {
       const result = await refreshSessionIfNeeded(999);
-      assert.strictEqual(result, false);
+      assert.strictEqual(result.isLoggedIn, false);
+      assert.strictEqual(result.reason, 'unknown');
     });
 
     it('updates session cookies in DB and returns true when session is valid', async () => {
@@ -64,7 +65,8 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
 
       const result = await refreshSessionIfNeeded(1, true);
-      assert.strictEqual(result, true);
+      assert.strictEqual(result.isLoggedIn, true);
+      assert.strictEqual(result.reason, 'authenticated');
 
       const session = db.getSessionById(1);
       assert.ok(session);
@@ -94,7 +96,42 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
       eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
 
       const result = await refreshSessionIfNeeded(1, true);
-      assert.strictEqual(result, false);
+      assert.strictEqual(result.isLoggedIn, false);
+    });
+
+    it('reports network_error (not expiry) and keeps cookies when e-Builder is unreachable', async () => {
+      db.addSession(
+        'offline@example.com',
+        'us1',
+        'Acct1',
+        JSON.stringify([{ name: 'keep', value: '1' }]),
+      );
+
+      const mockBrowser: any = {
+        connected: true,
+        createBrowserContext: async () => ({
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            url: () => 'about:blank',
+            goto: async () => {
+              throw new Error(
+                'net::ERR_NAME_NOT_RESOLVED at https://app.e-builder.net/da2/Home/index2.aspx',
+              );
+            },
+          }),
+          setCookie: async () => {},
+          cookies: async () => [],
+          close: async () => {},
+        }),
+      };
+      eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+
+      const result = await refreshSessionIfNeeded(1, true);
+      assert.strictEqual(result.isLoggedIn, false);
+      assert.strictEqual(result.reason, 'network_error');
+      const session = db.getSessionById(1);
+      assert.deepStrictEqual(JSON.parse(session!.session_cookies), [{ name: 'keep', value: '1' }]);
     });
   });
 

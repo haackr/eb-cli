@@ -107,32 +107,73 @@ describe('Session Commands (src/commands/session/)', () => {
       ]);
     });
 
-    it('deletes invalid sessions from the database', async () => {
-      db.addSession('invalid@example.com', 'us1', 'Acct1', '[]');
-
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => {
-              throw new Error('Not logged in');
-            },
-          }),
-          setCookie: async () => {},
-          cookies: async () => [],
-          close: async () => {},
+    const mockBrowserLandingOn = (landedUrl: string, gotoError?: Error): any => ({
+      connected: true,
+      createBrowserContext: async () => ({
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          url: () => landedUrl,
+          goto: async () => {
+            if (gotoError) throw gotoError;
+          },
+          waitForSelector: async () => {
+            throw new Error('Not logged in');
+          },
+          evaluate: async () => false,
         }),
-      };
+        setCookie: async () => {},
+        cookies: async () => [],
+        close: async () => {},
+      }),
+    });
 
-      eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+    it('deletes sessions redirected to login when --delete is passed', async () => {
+      db.addSession('expired@example.com', 'us1', 'Acct1', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowserLandingOn('https://app.e-builder.net/Login/Login.aspx?ReturnUrl=%2fda2');
 
-      await SessionTest.run([]);
+      const results: any = await SessionTest.run(['--json', '--delete']);
+      assert.strictEqual(results[0].reason, 'redirected_to_login');
+      assert.strictEqual(results[0].deleted, true);
+      assert.strictEqual(db.getSessions().length, 0);
+    });
 
-      const sessions = db.getSessions();
-      assert.strictEqual(sessions.length, 0);
+    it('does not delete expired sessions by default', async () => {
+      db.addSession('expired-kept@example.com', 'us1', 'Acct1', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowserLandingOn('https://id.trimble.com/ui/sign_in.html');
+
+      const results: any = await SessionTest.run(['--json']);
+      assert.strictEqual(results[0].reason, 'redirected_to_login');
+      assert.strictEqual(results[0].deleted, false);
+      assert.strictEqual(db.getSessions().length, 1);
+    });
+
+    it('never deletes on network errors, even with --delete', async () => {
+      db.addSession('sandboxed@example.com', 'us1', 'Acct1', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowserLandingOn('about:blank', new Error('net::ERR_INTERNET_DISCONNECTED'));
+
+      const results: any = await SessionTest.run(['--json', '--delete']);
+      assert.strictEqual(results[0].valid, false);
+      assert.strictEqual(results[0].reason, 'network_error');
+      assert.match(results[0].error, /NOT invalidated/);
+      assert.strictEqual(results[0].deleted, false);
+      assert.strictEqual(db.getSessions().length, 1);
+    });
+
+    it('never deletes on navigation timeouts, even with --delete', async () => {
+      db.addSession('slow@example.com', 'us1', 'Acct1', '[]');
+      const timeout = new Error('Navigation timeout of 90000 ms exceeded');
+      timeout.name = 'TimeoutError';
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowserLandingOn('about:blank', timeout);
+
+      const results: any = await SessionTest.run(['--json', '--delete']);
+      assert.strictEqual(results[0].reason, 'timeout');
+      assert.strictEqual(results[0].deleted, false);
+      assert.strictEqual(db.getSessions().length, 1);
     });
 
     it('returns structured JSON array and retains sessions when --no-delete is passed', async () => {

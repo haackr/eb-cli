@@ -10,5 +10,7 @@ declare global {
     export type LaunchOptions = _puppeteer.LaunchOptions;
     export type Frame = _puppeteer.Frame;
     export type Target = _puppeteer.Target;
+    export type HTTPResponse = _puppeteer.HTTPResponse;
+    export type Dialog = _puppeteer.Dialog;
   }
 }

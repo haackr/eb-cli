@@ -158,32 +158,66 @@ describe('BaseSessionCommand (src/lib/base-session-command.ts)', () => {
       assert.deepStrictEqual(refreshed, originalCookies);
     });
 
+    const mockBrowser = (landedUrl: string, gotoError?: Error): any => ({
+      connected: true,
+      createBrowserContext: async () => ({
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          url: () => landedUrl,
+          goto: async () => {
+            if (gotoError) throw gotoError;
+          },
+          waitForSelector: async () => {
+            throw new Error('Timeout');
+          },
+        }),
+        setCookie: async () => {},
+        cookies: async () => [],
+        close: async () => {},
+      }),
+    });
+
     it('throws when session has expired and cannot be refreshed', async () => {
       db.addSession('expired@example.com', 'us1', 'Acct', '[]');
-
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => {
-              throw new Error('Timeout');
-            },
-          }),
-          setCookie: async () => {},
-          cookies: async () => [],
-          close: async () => {},
-        }),
-      };
-
-      eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowser('https://app.e-builder.net/Login/Login.aspx');
 
       await assert.rejects(
         async () => cmd.publicGetSessionCookies(1, true),
-        /CLI Error: Session has expired. Please log in again using 'eb login'./,
+        /Session has expired.*Please log in again using 'eb login'/,
       );
+    });
+
+    it('reports a network error (not expiry) when e-Builder is unreachable', async () => {
+      db.addSession('offline@example.com', 'us1', 'Acct', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowser('about:blank', new Error('net::ERR_NAME_NOT_RESOLVED'));
+
+      await assert.rejects(
+        async () => cmd.publicGetSessionCookies(1, true),
+        (err: any) => {
+          assert.match(err.message, /Cannot reach https:\/\/app\.e-builder\.net/);
+          assert.match(err.message, /NOT invalidated/);
+          assert.doesNotMatch(err.message, /Session has expired/);
+          return true;
+        },
+      );
+      assert.strictEqual(db.getSessions().length, 1);
+    });
+
+    it('returns stored cookies without a browser when skipRefresh is set', async () => {
+      db.addSession(
+        'stored@example.com',
+        'us1',
+        'Acct',
+        JSON.stringify([{ name: 'a', value: 'b' }]),
+      );
+      eb.BrowserManager.getInstance().getBrowser = async () => {
+        throw new Error('browser should not be launched');
+      };
+      const cookies = await (cmd as any).getSessionCookies(1, true, { skipRefresh: true });
+      assert.deepStrictEqual(cookies, [{ name: 'a', value: 'b' }]);
     });
   });
 });

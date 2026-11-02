@@ -3,6 +3,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Environment, baseurl, BrowserManager } from './index.js';
+import {
+  classifyNavigationError,
+  isLoginUrl,
+  pageShowsLoginForm,
+  safePageUrl,
+  type SessionCheckResult,
+} from './session-check.js';
 
 // Selectors for the login page
 const usernameSelector =
@@ -157,12 +164,7 @@ export function isEBuilderAuthenticatedUrl(url: URL, env: Environment): boolean 
   if (!isEBuilderDomain) return false;
 
   const path = url.pathname.toLowerCase();
-  if (
-    path.startsWith('/auth/') ||
-    path.startsWith('/login/') ||
-    path.includes('loginsequence') ||
-    path.includes('signin')
-  ) {
+  if (isLoginUrl(url.href) || path.includes('signin')) {
     return false;
   }
 
@@ -1102,14 +1104,17 @@ export async function loginWithSso(
   return await browser.cookies();
 }
 
+/**
+ * Navigates to the e-Builder home page with the given cookies and reports whether the session
+ * is authenticated. Never throws for navigation failures: network errors, timeouts, and HTTP 5xx
+ * responses are reported via `reason` so callers can avoid treating them as expired sessions.
+ */
 export async function isLoggedIn(
   env: Environment,
   headless: boolean = true,
   cookies: puppeteer.Cookie[],
   browser?: puppeteer.Browser,
-): Promise<{ isLoggedIn: boolean; newCookies: puppeteer.Cookie[] }> {
-  let loggedIn = false;
-  let newCookies: puppeteer.Cookie[] = [];
+): Promise<SessionCheckResult> {
   if (!browser) {
     browser = await BrowserManager.getInstance().getBrowser(headless, [
       `--app=http://${env}.${baseurl}`,
@@ -1123,38 +1128,69 @@ export async function isLoggedIn(
   page.setDefaultTimeout(90_000);
 
   try {
-    // Clear existing cookies and set new ones
-    await context.setCookie(...cookies);
-    await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 90_000,
-    });
-
+    let response: puppeteer.HTTPResponse | null | undefined;
     try {
-      await page.waitForSelector(myHomeTabSelector, {
-        timeout: 5000,
+      await context.setCookie(...cookies);
+      response = await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 90_000,
       });
-      loggedIn = true;
-      newCookies = await context.cookies();
-    } catch {
-      try {
-        await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
-        loggedIn = await isEBuilderPageAuthenticated(page, env);
-        if (loggedIn) {
-          newCookies = await context.cookies();
-        }
-      } catch {
-        loggedIn = false;
-      }
+    } catch (err) {
+      return {
+        isLoggedIn: false,
+        reason: classifyNavigationError(err) ?? 'unknown',
+        errorMessage: err instanceof Error ? err.message : String(err),
+        landedUrl: safePageUrl(page),
+        newCookies: [],
+      };
     }
-  } catch {
-    loggedIn = false;
+
+    let loggedIn = false;
+    try {
+      await page.waitForSelector(myHomeTabSelector, { timeout: 5000 });
+      loggedIn = true;
+    } catch {
+      if (typeof page.waitForNetworkIdle === 'function') {
+        await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
+      }
+      loggedIn = await isEBuilderPageAuthenticated(page, env);
+    }
+
+    const landedUrl = safePageUrl(page);
+    if (loggedIn) {
+      return {
+        isLoggedIn: true,
+        reason: 'authenticated',
+        landedUrl,
+        newCookies: await context.cookies(),
+      };
+    }
+
+    if (isLoginUrl(landedUrl) || (await pageShowsLoginForm(page))) {
+      return { isLoggedIn: false, reason: 'redirected_to_login', landedUrl, newCookies: [] };
+    }
+
+    const status = typeof response?.status === 'function' ? response.status() : undefined;
+    if (status !== undefined && status >= 500) {
+      return {
+        isLoggedIn: false,
+        reason: 'server_error',
+        errorMessage: `HTTP ${status}`,
+        landedUrl,
+        newCookies: [],
+      };
+    }
+
+    return {
+      isLoggedIn: false,
+      reason: 'unknown',
+      errorMessage: 'Authenticated page markers not found',
+      landedUrl,
+      newCookies: [],
+    };
+  } finally {
+    await context.close().catch(() => {});
   }
-
-  // Close the context to clean up
-  await context.close().catch(() => {});
-
-  return { isLoggedIn: loggedIn, newCookies: newCookies };
 }
 
 export async function logout(

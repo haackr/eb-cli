@@ -53,15 +53,25 @@ export default class ReportsCopy extends Command {
     const headless = !flags['show-browser'];
 
     // Refresh cookies for source and target
-    if (!(await refreshSessionIfNeeded(fromSession.id, headless))) {
-      this.error(`Source session ${fromSession.id} has expired.`);
+    const fromSessionCheck = await refreshSessionIfNeeded(fromSession.id, headless);
+    if (!fromSessionCheck.isLoggedIn) {
+      const err = eb.sessionCheckErrorFor(
+        fromSessionCheck,
+        `https://${eb.getEnvironment(fromSession.environment)}.${eb.baseurl}`,
+      );
+      this.error(`Source session ${fromSession.id}: ${err.message}`, { code: err.code });
     }
     const fromCookies = JSON.parse(
       (db.getSessionById(fromSession.id) as db.SessionRow).session_cookies,
     );
 
-    if (!(await refreshSessionIfNeeded(toSession.id, headless))) {
-      this.error(`Target session ${toSession.id} has expired.`);
+    const toSessionCheck = await refreshSessionIfNeeded(toSession.id, headless);
+    if (!toSessionCheck.isLoggedIn) {
+      const err = eb.sessionCheckErrorFor(
+        toSessionCheck,
+        `https://${eb.getEnvironment(toSession.environment)}.${eb.baseurl}`,
+      );
+      this.error(`Target session ${toSession.id}: ${err.message}`, { code: err.code });
     }
     const toCookies = JSON.parse(
       (db.getSessionById(toSession.id) as db.SessionRow).session_cookies,
