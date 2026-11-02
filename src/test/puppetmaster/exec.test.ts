@@ -4,9 +4,13 @@ import puppeteer from 'puppeteer';
 import {
   resolveSessionUrl,
   executeInSession,
+  normalizeUserScript,
+  looksLikePuppeteerScript,
   Environment,
   BrowserManager,
 } from '../../lib/eb-puppetmaster/index.js';
+
+const require_sep = () => (process.platform === 'win32' ? '\\' : '/');
 
 describe('Session Exec Operations (src/lib/eb-puppetmaster/exec.ts)', () => {
   let browser: puppeteer.Browser;
@@ -289,6 +293,170 @@ describe('Session Exec Operations (src/lib/eb-puppetmaster/exec.ts)', () => {
           return true;
         },
       );
+    });
+
+    const page = (title: string, body: string) =>
+      'data:text/html,' +
+      encodeURIComponent(
+        `<!DOCTYPE html><html><head><title>${title}</title></head><body>${body}</body></html>`,
+      );
+
+    it('runs module-style script files (export default / module.exports) in both modes', async () => {
+      const url = page('Modules', '<span id="v">42</span>');
+      const dom = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url,
+        script: `export default (arg) => document.getElementById('v').textContent + arg;`,
+        arg: '!',
+      });
+      assert.strictEqual(dom.result, '42!');
+
+      const pptr = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url,
+        mode: 'puppeteer',
+        script: `const sel = '#v';\nmodule.exports = async ({ page, args }) => {\n  const t = await page.$eval(sel, (el) => el.textContent);\n  return t + args.s;\n};\n`,
+        arg: { s: '?' },
+      });
+      assert.strictEqual(pptr.result, '42?');
+    });
+
+    it('passes the page directly to `async (page) => ...` scripts and exposes fs/path/os/eb', async () => {
+      const url = page(
+        'Ctx',
+        '<table id="grid"><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>',
+      );
+      const bare = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url,
+        mode: 'puppeteer',
+        script: `async (page) => await page.title()`,
+      });
+      assert.strictEqual(bare.result, 'Ctx');
+
+      const ctx = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url,
+        mode: 'puppeteer',
+        script: `async ({ fs, path, os, eb }) => ({
+          hasFs: typeof fs.readFileSync === 'function',
+          sep: path.sep,
+          hasOs: typeof os.tmpdir === 'function',
+          table: await eb.getTable('#grid'),
+        })`,
+      });
+      assert.deepStrictEqual(ctx.result, {
+        hasFs: true,
+        sep: require_sep(),
+        hasOs: true,
+        table: { headers: ['A'], rowCount: 1, rows: [{ A: '1' }] },
+      });
+    });
+
+    it('applies --dialog-policy and records dialogs', async () => {
+      const url = page('Dialogs', '');
+      const dismissed = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url,
+        script: `() => confirm('Delete line item?')`,
+      });
+      assert.strictEqual(dismissed.result, false);
+      assert.deepStrictEqual(dismissed.dialogs, [
+        { type: 'confirm', message: 'Delete line item?', defaultValue: '', handled: 'dismissed' },
+      ]);
+
+      const accepted = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url,
+        dialogPolicy: 'accept',
+        script: `() => confirm('Void instance?')`,
+      });
+      assert.strictEqual(accepted.result, true);
+      assert.strictEqual(accepted.dialogs[0]?.handled, 'accepted');
+    });
+
+    it('yields to a dialog listener registered by a Puppeteer script', async () => {
+      const result = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url: page('Prompt', ''),
+        mode: 'puppeteer',
+        script: `async ({ page }) => {
+          page.on('dialog', (d) => d.accept('from-script'));
+          return await page.evaluate(() => prompt('Name?'));
+        }`,
+      });
+      assert.strictEqual(result.result, 'from-script');
+      assert.strictEqual(result.dialogs[0]?.handled, 'script');
+    });
+
+    it('ignores hidden about:blank iframes when locating the content document', async () => {
+      const url = page(
+        'Inner Page',
+        '<iframe src="about:blank" style="display:none"></iframe><label for="f">Field</label><input id="f" name="f" value="x"/>',
+      );
+      const result = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url,
+        inspect: true,
+        script: `(arg, eb) => eb.getContentDocument() === document`,
+      });
+      assert.strictEqual(result.result, true);
+      assert.strictEqual(result.frameUrl, null);
+      assert.strictEqual(result.inspection?.frameUrl, null);
+      assert.ok(result.inspection?.fields.some((f) => f.name === 'f'));
+    });
+  });
+
+  describe('normalizeUserScript / looksLikePuppeteerScript', () => {
+    it('strips leading export wrappers and trailing semicolons', () => {
+      assert.strictEqual(
+        normalizeUserScript('export default async ({ page }) => 1;'),
+        'async ({ page }) => 1',
+      );
+      assert.strictEqual(normalizeUserScript('module.exports = (a) => a;\n'), '(a) => a');
+      assert.strictEqual(normalizeUserScript('exports.default = () => 2'), '() => 2');
+      assert.strictEqual(normalizeUserScript('document.title'), 'document.title');
+    });
+
+    it('wraps files with helpers before the export in an IIFE', () => {
+      const code = normalizeUserScript('const x = 1;\nmodule.exports = () => x;');
+      assert.strictEqual((0, eval)(`(${code})`)(), 1);
+    });
+
+    it('detects Puppeteer-style scripts', () => {
+      for (const code of [
+        'async ({ page, arg }) => {}',
+        'async ({ arg, page }) => {}',
+        'export default async function run({ browser }) {}',
+        'async (page) => page.title()',
+        'page => page.title()',
+        'await page.goto("/da2/Home/index2.aspx")',
+      ]) {
+        assert.strictEqual(looksLikePuppeteerScript(code), true, code);
+      }
+      for (const code of [
+        'document.title',
+        '(arg, eb) => eb.findField("Title")?.value',
+        '() => [...document.querySelectorAll("a")].length',
+      ]) {
+        assert.strictEqual(looksLikePuppeteerScript(code), false, code);
+      }
     });
   });
 });

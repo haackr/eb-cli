@@ -137,16 +137,20 @@ export default class McpCommand extends Command {
           .describe('e-Builder relative path (e.g. /da2/Processes/ProcessesView.aspx) or full URL'),
         sessionId: z.number().optional().describe('Specific session ID to use'),
         username: z.string().optional().describe('Username to resolve session for'),
+        account: z
+          .string()
+          .optional()
+          .describe('Select session by account name (case-insensitive substring, e.g. "prod")'),
         waitForSelector: z
           .string()
           .optional()
           .describe('CSS selector to wait for before inspecting'),
         screenshot: z.boolean().optional().describe('Capture screenshot to temporary file'),
       },
-      async ({ url, sessionId, username, waitForSelector, screenshot }) => {
-        const session = resolveMcpSession(sessionId, username);
+      async ({ url, sessionId, username, account, waitForSelector, screenshot }) => {
+        const session = resolveMcpSession(sessionId, username, account);
         const env = eb.getEnvironment(session.environment);
-        const cookies = await getMcpSessionCookies(session);
+        const cookies = getMcpStoredCookies(session);
 
         let screenshotPath: string | undefined;
         if (screenshot) {
@@ -206,12 +210,29 @@ export default class McpCommand extends Command {
       'Execute a DOM JavaScript snippet or Puppeteer script inside an authenticated e-Builder session. In DOM mode, has access to the in-browser "eb" helper (eb.findField, eb.getRadComboBox, eb.setRadComboBox, eb.getTable, eb.getContentDocument).',
       {
         url: z.string().optional().describe('e-Builder relative path or full URL'),
-        eval: z.string().optional().describe('JavaScript snippet to evaluate'),
-        mode: z.enum(['dom', 'puppeteer']).optional().default('dom').describe('Execution mode'),
+        eval: z
+          .string()
+          .optional()
+          .describe(
+            'JavaScript to evaluate. DOM mode: `(arg, eb) => ...`. Puppeteer mode: `async ({ page, arg, eb, fs }) => ...`. `export default` / `module.exports =` wrappers are accepted.',
+          ),
+        mode: z
+          .enum(['dom', 'puppeteer'])
+          .optional()
+          .describe('Execution mode (auto-detected from the script when omitted)'),
         arg: z.unknown().optional().describe('Argument passed to the script function'),
         waitForSelector: z.string().optional().describe('CSS selector to wait for'),
         sessionId: z.number().optional().describe('Specific session ID to use'),
         username: z.string().optional().describe('Username to resolve session for'),
+        account: z
+          .string()
+          .optional()
+          .describe('Select session by account name (case-insensitive substring, e.g. "prod")'),
+        dialogPolicy: z
+          .enum(['dismiss', 'accept', 'manual'])
+          .optional()
+          .default('dismiss')
+          .describe('How to answer alert/confirm/prompt dialogs'),
         screenshot: z.string().optional().describe('Save full-page screenshot to this path'),
       },
       async ({
@@ -222,11 +243,15 @@ export default class McpCommand extends Command {
         waitForSelector,
         sessionId,
         username,
+        account,
+        dialogPolicy,
         screenshot,
       }) => {
-        const session = resolveMcpSession(sessionId, username);
+        const session = resolveMcpSession(sessionId, username, account);
         const env = eb.getEnvironment(session.environment);
-        const cookies = await getMcpSessionCookies(session);
+        const cookies = getMcpStoredCookies(session);
+        const resolvedMode: eb.ExecuteInSessionMode =
+          mode ?? (scriptCode && eb.looksLikePuppeteerScript(scriptCode) ? 'puppeteer' : 'dom');
 
         try {
           const result = await eb.executeInSession({
@@ -236,8 +261,9 @@ export default class McpCommand extends Command {
             url,
             waitForSelector,
             script: scriptCode,
-            mode,
+            mode: resolvedMode,
             arg,
+            dialogPolicy,
             screenshotPath: screenshot,
           });
 
@@ -262,6 +288,8 @@ export default class McpCommand extends Command {
                     title: result.title,
                     frameUrl: result.frameUrl,
                     screenshotPath: result.screenshotPath,
+                    mode: resolvedMode,
+                    dialogs: result.dialogs,
                     result: result.result,
                   },
                   null,
@@ -539,24 +567,42 @@ export default class McpCommand extends Command {
   }
 }
 
-function resolveMcpSession(sessionId?: number, username?: string): db.SessionRow {
+function resolveMcpSession(sessionId?: number, username?: string, account?: string): db.SessionRow {
   if (sessionId) {
     const s = db.getSessionById(sessionId) as db.SessionRow;
     if (!s) throw new Error(`Session with ID ${sessionId} not found.`);
     return s;
   }
-  if (username) {
-    const sessions = db.getSessionsByUsername(username) as db.SessionRow[];
-    if (sessions.length === 0) throw new Error(`No sessions found for username ${username}.`);
-    return [...sessions].sort((a, b) => b.id - a.id)[0]!;
-  }
-  const allSessions = db.getSessions() as db.SessionRow[];
-  if (allSessions.length === 0) {
+  let sessions = (
+    username ? db.getSessionsByUsername(username) : db.getSessions()
+  ) as db.SessionRow[];
+  if (username && sessions.length === 0)
+    throw new Error(`No sessions found for username ${username}.`);
+  if (sessions.length === 0) {
     throw new Error(
       "No active e-Builder sessions found in eb-cli. Please run 'eb session import' or 'eb login' first.",
     );
   }
-  return [...allSessions].sort((a, b) => b.id - a.id)[0]!;
+  if (account) {
+    const needle = account.trim().toLowerCase();
+    const exact = sessions.filter((s) => (s.account ?? '').trim().toLowerCase() === needle);
+    const partial = sessions.filter((s) => (s.account ?? '').toLowerCase().includes(needle));
+    const matches = exact.length > 0 ? exact : partial;
+    if (matches.length === 0) {
+      throw new Error(
+        `No sessions found matching account "${account}". Available: ${sessions
+          .map((s) => `"${s.account}" (id ${s.id})`)
+          .join(', ')}.`,
+      );
+    }
+    sessions = matches;
+  }
+  return [...sessions].sort((a, b) => b.id - a.id)[0]!;
+}
+
+/** Stored cookies without a pre-flight check; executeInSession verifies auth on navigation. */
+function getMcpStoredCookies(session: db.SessionRow): any[] {
+  return JSON.parse(session.session_cookies || '[]');
 }
 
 async function getMcpSessionCookies(session: db.SessionRow): Promise<any[]> {

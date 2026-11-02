@@ -20,6 +20,11 @@ export abstract class BaseSessionCommand extends Command {
       char: 'u',
       description: 'Username to use session for',
     }),
+    account: Flags.string({
+      char: 'A',
+      description:
+        'Select session by account name (case-insensitive substring, e.g. "prod", "uat", or "Acme - Production")',
+    }),
     'show-browser': Flags.boolean({
       char: 's',
       description: 'Show browser window',
@@ -51,6 +56,7 @@ export abstract class BaseSessionCommand extends Command {
   protected async getSession(flags: {
     'session-id'?: number | undefined;
     username?: string | undefined;
+    account?: string | undefined;
     'show-browser'?: boolean | undefined;
   }): Promise<SessionRow> {
     let session: SessionRow | undefined;
@@ -60,18 +66,14 @@ export abstract class BaseSessionCommand extends Command {
       if (!session) {
         this.error(`Session with ID ${flags['session-id']} not found.`);
       }
-    } else if (flags.username) {
-      const sessions = db.getSessionsByUsername(flags.username) as SessionRow[];
-      if (sessions.length === 0) {
-        this.error(`No sessions found for username ${flags.username}.`);
-      } else if (sessions.length === 1) {
+    } else if (flags.username || flags.account) {
+      const sessions = this.filterSessions(flags.username, flags.account);
+      if (sessions.length === 1) {
         session = sessions[0];
+      } else if (!this.isInteractive()) {
+        session = [...sessions].sort((a, b) => b.id - a.id)[0];
       } else {
-        if (!this.isInteractive()) {
-          session = [...sessions].sort((a, b) => b.id - a.id)[0];
-        } else {
-          session = await this.selectSession(sessions);
-        }
+        session = await this.selectSession(sessions);
       }
     } else {
       session = await this.getOrCreateSession(flags['show-browser']);
@@ -82,6 +84,38 @@ export abstract class BaseSessionCommand extends Command {
     }
 
     return session;
+  }
+
+  /**
+   * Filters stored sessions by username (exact) and/or account (case-insensitive substring;
+   * exact account-name matches win over substring matches). Errors with the available
+   * accounts when nothing matches.
+   */
+  private filterSessions(username?: string, account?: string): SessionRow[] {
+    let sessions = (
+      username ? db.getSessionsByUsername(username) : db.getSessions()
+    ) as SessionRow[];
+    if (username && sessions.length === 0) {
+      this.error(`No sessions found for username ${username}.`);
+    }
+
+    if (account) {
+      const needle = account.trim().toLowerCase();
+      const exact = sessions.filter((s) => (s.account ?? '').trim().toLowerCase() === needle);
+      const partial = sessions.filter((s) => (s.account ?? '').toLowerCase().includes(needle));
+      const matches = exact.length > 0 ? exact : partial;
+      if (matches.length === 0) {
+        const available = [...new Set(sessions.map((s) => `"${s.account}" (id ${s.id})`))];
+        this.error(
+          `No sessions found matching account "${account}"${
+            username ? ` for username ${username}` : ''
+          }. Available: ${available.length ? available.join(', ') : 'none'}.`,
+        );
+      }
+      sessions = matches;
+    }
+
+    return sessions;
   }
 
   /**

@@ -4,6 +4,10 @@ import * as eb from '../../lib/eb-puppetmaster/index.js';
 import * as db from '../../lib/db.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
 
+function isLocalScriptPath(value: string): boolean {
+  return /\.(m?js|cjs|ts)$/i.test(value) && !/^https?:\/\//i.test(value) && fs.existsSync(value);
+}
+
 function parseArgValue(rawArg?: string): unknown {
   if (rawArg === undefined) return undefined;
   try {
@@ -20,6 +24,8 @@ export default class SessionExec extends BaseSessionCommand {
     'Navigate to an e-Builder path or URL using a stored session (headless by default) and evaluate a DOM or Puppeteer script. Automatically resolves environment URLs, verifies the session on the target navigation, and saves refreshed cookies. Errors report a typed code (SessionExpiredError, NetworkError, NavigationTimeoutError) so network problems are not mistaken for logouts.';
   static override examples = [
     '<%= config.bin %> <%= command.id %> /da2/Processes/ProcessesView.aspx --eval "document.title" --json',
+    '<%= config.bin %> <%= command.id %> --account prod --url /da2/Home/index2.aspx --file ./script.js --json',
+    '<%= config.bin %> <%= command.id %> ./script.js --account uat --json',
     '<%= config.bin %> <%= command.id %> /da2/Setup/Processes/ProcessTypesView.aspx --script-file extract-types.js --json',
     '<%= config.bin %> <%= command.id %> /da2/Processes/ImportProcesses/ImportProcesses.aspx --puppeteer --script-file inspect-step2.js --arg \'{"file":"./dummy.xlsx"}\' --json',
   ];
@@ -38,19 +44,26 @@ export default class SessionExec extends BaseSessionCommand {
     ...BaseSessionCommand.baseFlags,
     eval: Flags.string({
       char: 'e',
-      description: 'JavaScript snippet or function to evaluate',
+      aliases: ['script'],
+      description: 'JavaScript snippet or function to evaluate (alias: --script)',
       exclusive: ['script-file'],
     }),
     'script-file': Flags.string({
       char: 'f',
-      description: 'Path to a JavaScript file to evaluate',
+      aliases: ['file'],
+      description:
+        'Path to a JavaScript file to evaluate (alias: --file). `export default` / `module.exports =` wrappers are accepted.',
       exclusive: ['eval'],
+    }),
+    url: Flags.string({
+      description:
+        'e-Builder relative path or full URL (alternative to the positional URL argument)',
     }),
     puppeteer: Flags.boolean({
       char: 'p',
       description:
-        'Run script in Node Puppeteer context ({ page, browser, context, env, origin, url, arg, settle }) instead of browser DOM context',
-      default: false,
+        'Run script in Node Puppeteer context ({ page, browser, context, env, origin, url, arg, args, fs, path, os, eb, settle, inspect }). Auto-detected when omitted; use --no-puppeteer to force DOM mode.',
+      allowNo: true,
     }),
     arg: Flags.string({
       char: 'a',
@@ -68,8 +81,13 @@ export default class SessionExec extends BaseSessionCommand {
       default: true,
       allowNo: true,
     }),
+    'dialog-policy': Flags.string({
+      description:
+        'How to answer alert/confirm/prompt dialogs. "manual" leaves them to your script; a Puppeteer script with its own page.on("dialog") listener always takes precedence.',
+      options: ['dismiss', 'accept', 'manual'],
+      default: 'dismiss',
+    }),
     inspect: Flags.boolean({
-      char: 'i',
       description:
         'Inspect and extract page structure (forms, fields, buttons, tables) into structured JSON AST',
       default: false,
@@ -81,14 +99,40 @@ export default class SessionExec extends BaseSessionCommand {
 
     let session: any;
     let env: eb.Environment | undefined;
+    let resolvedUrl: string | undefined = flags.url ?? args.url;
 
     try {
+      if (flags.url && args.url && flags.url !== args.url && !isLocalScriptPath(args.url)) {
+        this.error(`Conflicting URLs: positional "${args.url}" and --url "${flags.url}".`);
+      }
+      let targetUrl: string | undefined = flags.url ?? args.url;
+      let scriptFile = flags['script-file'];
+
+      // `eb exec /tmp/script.js` — treat a positional local script path as --script-file.
+      if (args.url && isLocalScriptPath(args.url) && !scriptFile && flags.eval === undefined) {
+        scriptFile = args.url;
+        targetUrl = flags.url;
+      }
+      resolvedUrl = targetUrl;
+
       let scriptContent: string | undefined = flags.eval;
-      if (flags['script-file']) {
-        if (!fs.existsSync(flags['script-file'])) {
-          this.error(`Script file not found: ${flags['script-file']}`);
+      if (scriptFile) {
+        if (!fs.existsSync(scriptFile)) {
+          this.error(`Script file not found: ${scriptFile}`);
         }
-        scriptContent = fs.readFileSync(flags['script-file'], 'utf8');
+        scriptContent = fs.readFileSync(scriptFile, 'utf8');
+      }
+
+      let mode: eb.ExecuteInSessionMode = flags.puppeteer ? 'puppeteer' : 'dom';
+      if (
+        flags.puppeteer === undefined &&
+        scriptContent &&
+        eb.looksLikePuppeteerScript(scriptContent)
+      ) {
+        mode = 'puppeteer';
+        process.stderr.write(
+          'eb exec: script looks like a Puppeteer script ({ page } / page.*); running with --puppeteer. Pass --no-puppeteer to force DOM mode.\n',
+        );
       }
 
       const headless = !flags['show-browser'];
@@ -106,10 +150,11 @@ export default class SessionExec extends BaseSessionCommand {
           env: env!,
           cookies,
           headless,
-          url: args.url,
+          url: targetUrl,
           waitForSelector: flags['wait-for'],
           script: scriptContent,
-          mode: flags.puppeteer ? 'puppeteer' : 'dom',
+          mode,
+          dialogPolicy: flags['dialog-policy'] as eb.DialogPolicy,
           arg: parsedArg,
           screenshotPath: flags.screenshot,
           screenshotOnFailure: flags['screenshot-on-failure'],
@@ -144,6 +189,8 @@ export default class SessionExec extends BaseSessionCommand {
         title: execResult.title,
         frameUrl: execResult.frameUrl,
         screenshotPath: execResult.screenshotPath,
+        httpStatus: execResult.httpStatus,
+        dialogs: execResult.dialogs,
         inspection: execResult.inspection,
         result: execResult.result,
       };
@@ -180,7 +227,7 @@ export default class SessionExec extends BaseSessionCommand {
                 account: session.account,
               }
             : undefined,
-          url: err.url || (args.url && env ? eb.resolveSessionUrl(env, args.url) : undefined),
+          url: err.url || (resolvedUrl && env ? eb.resolveSessionUrl(env, resolvedUrl) : undefined),
           title: err.title || '',
           frameUrl: err.frameUrl || null,
           screenshotPath: err.screenshotPath || null,

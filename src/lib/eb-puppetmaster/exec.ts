@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';
@@ -105,6 +106,11 @@ export type ExecuteInSessionOptions = {
    * ASP.NET sliding session, and the refreshed cookies are returned in the result.
    */
   verifyAuth?: boolean | undefined;
+  /**
+   * How to answer alert/confirm/prompt dialogs (default: dismiss). `manual` leaves them to the
+   * script. A Puppeteer script that registers its own `page.on('dialog')` listener always wins.
+   */
+  dialogPolicy?: DialogPolicy | undefined;
 };
 
 export type ExecuteInSessionResult = {
@@ -117,6 +123,8 @@ export type ExecuteInSessionResult = {
   screenshotPath: string | null;
   /** HTTP status of the main navigation response, when available. */
   httpStatus?: number | undefined;
+  /** Dialogs raised during the run and how they were handled. */
+  dialogs: ExecDialogRecord[];
 };
 
 export type PuppeteerExecContext = {
@@ -127,8 +135,24 @@ export type PuppeteerExecContext = {
   origin: string;
   url: string;
   arg: unknown;
+  /** Alias of `arg`. */
+  args: unknown;
+  fs: typeof import('fs');
+  path: typeof import('path');
+  os: typeof import('os');
+  /** Node-side proxy for the in-browser `eb` helper (results must be JSON-serializable). */
+  eb: Record<string, (...args: unknown[]) => Promise<unknown>>;
   settle: () => Promise<void>;
   inspect: () => Promise<PageInspectionResult>;
+};
+
+export type DialogPolicy = 'accept' | 'dismiss' | 'manual';
+
+export type ExecDialogRecord = {
+  type: string;
+  message: string;
+  defaultValue: string;
+  handled: 'accepted' | 'dismissed' | 'script';
 };
 
 const EBUILDER_HOST_PATTERN = /(^|\.)e-builder\.(net|ca)$/i;
@@ -195,7 +219,7 @@ export async function waitForEBuilderPageToSettle(
           }
 
           const iframe = document.querySelector<HTMLIFrameElement>(
-            'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+            'iframe#contentFrame, iframe[name="contentFrame"]',
           );
           if (iframe) {
             try {
@@ -229,7 +253,7 @@ async function waitForSelectorInPageOrFrame(
       (sel) => {
         if (document.querySelector(sel)) return true;
         const iframe = document.querySelector<HTMLIFrameElement>(
-          'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+          'iframe#contentFrame, iframe[name="contentFrame"]',
         );
         try {
           if (iframe?.contentDocument?.querySelector(sel)) return true;
@@ -251,14 +275,18 @@ export async function inspectPage(page: puppeteer.Page): Promise<PageInspectionR
   return await page.evaluate(() => {
     const getDoc = () => {
       const iframe = document.querySelector<HTMLIFrameElement>(
-        'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+        'iframe#contentFrame, iframe[name="contentFrame"]',
       );
       try {
-        if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
-          return {
-            doc: iframe.contentDocument,
-            frameUrl: iframe.contentWindow?.location?.href || iframe.src || null,
-          };
+        const href = iframe?.contentWindow?.location?.href || iframe?.getAttribute('src') || '';
+        if (
+          iframe &&
+          href &&
+          href !== 'about:blank' &&
+          iframe.contentDocument?.body &&
+          iframe.contentDocument.body.children.length > 0
+        ) {
+          return { doc: iframe.contentDocument, frameUrl: href };
         }
       } catch {}
       return { doc: document, frameUrl: null };
@@ -513,9 +541,13 @@ const inBrowserEbHelper = `
     if (window.eb) return;
     window.eb = {
       getContentDocument: function() {
-        var iframe = document.querySelector('iframe#contentFrame, iframe[name="contentFrame"], iframe');
+        // Only the e-Builder #contentFrame wrapper counts. Telerik/analytics controls inject
+        // hidden about:blank iframes, which must never be mistaken for page content.
+        var iframe = document.querySelector('iframe#contentFrame, iframe[name="contentFrame"]');
         try {
-          if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
+          var href = (iframe && ((iframe.contentWindow && iframe.contentWindow.location && iframe.contentWindow.location.href) || iframe.getAttribute('src'))) || '';
+          if (iframe && href && href !== 'about:blank' && iframe.contentDocument && iframe.contentDocument.body &&
+              iframe.contentDocument.body.children.length > 0) {
             return iframe.contentDocument;
           }
         } catch(e) {}
@@ -613,6 +645,44 @@ const inBrowserEbHelper = `
   })();
 `;
 
+const EXPORT_PREFIX = /^\s*(?:export\s+default\b|module\.exports\s*=|exports\.default\s*=)\s*/;
+const EXPORT_LINE =
+  /^([ \t]*)(?:export\s+default\b|module\.exports\s*=|exports\.default\s*=)[ \t]*/m;
+
+/**
+ * Accepts module-style script files as well as bare expressions/functions. Strips a leading
+ * `export default` / `module.exports =` / `exports.default =`; when helpers precede the export,
+ * wraps the file in an IIFE that returns the exported value.
+ */
+export function normalizeUserScript(rawScript: string): string {
+  let code = rawScript
+    .replace(/^\uFEFF/, '')
+    .replace(/^#!.*\n/, '')
+    .trim();
+  if (EXPORT_PREFIX.test(code)) {
+    code = code.replace(EXPORT_PREFIX, '');
+  } else if (EXPORT_LINE.test(code)) {
+    code = `(() => {\n${code.replace(EXPORT_LINE, '$1return ')}\n})()`;
+  }
+  return code.replace(/;\s*$/, '');
+}
+
+const PUPPETEER_PARAM_DESTRUCTURE =
+  /^\s*(?:async\s+)?(?:function\s*\w*\s*)?\(\s*\{[^}]*\b(?:page|browser|context)\b[^}]*\}/;
+const BARE_PAGE_PARAM = /^\s*(?:async\s+)?(?:(?:function\s*\w*\s*)?\(\s*page\s*[,)]|page\s*=>)/;
+const PAGE_API_CALL =
+  /\bpage\.(?:goto|evaluate|\$eval|\$\$eval|\$|\$\$|click|type|waitForSelector|waitForNavigation|waitForFunction|waitForNetworkIdle|frames|mainFrame|setRequestInterception|screenshot|keyboard|mouse|on)\b/;
+
+/** Heuristic: does this (normalized) script expect the Node Puppeteer context? */
+export function looksLikePuppeteerScript(code: string): boolean {
+  const normalized = normalizeUserScript(code);
+  return (
+    PUPPETEER_PARAM_DESTRUCTURE.test(normalized) ||
+    BARE_PAGE_PARAM.test(normalized) ||
+    PAGE_API_CALL.test(normalized)
+  );
+}
+
 async function evaluateDomScript(
   page: puppeteer.Page,
   script: string,
@@ -622,6 +692,7 @@ async function evaluateDomScript(
     await page.evaluate(inBrowserEbHelper).catch(() => {});
   }
 
+  const normalizedScript = normalizeUserScript(script);
   return await page.evaluate(
     async (code: string, passedArg: unknown) => {
       const eb = (window as any).eb;
@@ -648,7 +719,7 @@ async function evaluateDomScript(
         }
       }
     },
-    script,
+    normalizedScript,
     arg,
   );
 }
@@ -657,12 +728,10 @@ async function evaluatePuppeteerScript(
   script: string,
   execContext: PuppeteerExecContext,
 ): Promise<unknown> {
+  const code = normalizeUserScript(script);
+  let evaluated: unknown;
   try {
-    const evaluated = (0, eval)(`(${script})`);
-    if (typeof evaluated === 'function') {
-      return await evaluated(execContext);
-    }
-    return await evaluated;
+    evaluated = (0, eval)(`(${code})`);
   } catch (err) {
     if (!(err instanceof SyntaxError)) {
       throw err;
@@ -670,10 +739,48 @@ async function evaluatePuppeteerScript(
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const fn = new AsyncFunction(
       'ctx',
-      'const { page, browser, context, env, origin, url, arg, settle, inspect } = ctx;\n' + script,
+      'const { page, browser, context, env, origin, url, arg, args, fs, path, os, eb, settle, inspect } = ctx;\n' +
+        code,
     );
     return await fn(execContext);
   }
+
+  if (typeof evaluated === 'function') {
+    // Agents often write `async (page) => ...`; hand them the page instead of the context.
+    if (BARE_PAGE_PARAM.test(Function.prototype.toString.call(evaluated))) {
+      return await evaluated(execContext.page, execContext.arg, execContext);
+    }
+    return await evaluated(execContext);
+  }
+  return await evaluated;
+}
+
+/**
+ * Node-side proxy for the in-browser `window.eb` helper: `await eb.getTable('#grid')` runs the
+ * helper inside the page and returns its (JSON-serializable) result.
+ */
+function createNodeEbHelper(
+  page: puppeteer.Page,
+): Record<string, (...args: unknown[]) => Promise<unknown>> {
+  return new Proxy({} as Record<string, (...args: unknown[]) => Promise<unknown>>, {
+    get(_target, method) {
+      if (typeof method !== 'string' || method === 'then') return undefined;
+      return async (...callArgs: unknown[]) => {
+        await page.evaluate(inBrowserEbHelper).catch(() => {});
+        return await page.evaluate(
+          async (m: string, a: unknown[]) => {
+            const helper = (window as any).eb;
+            if (!helper || typeof helper[m] !== 'function') {
+              throw new Error(`eb.${m} is not a function`);
+            }
+            return await helper[m](...a);
+          },
+          method,
+          callArgs,
+        );
+      };
+    },
+  });
 }
 
 /**
@@ -698,7 +805,9 @@ export async function executeInSession(
     inspect = false,
     blockAssets,
     verifyAuth = true,
+    dialogPolicy = 'dismiss',
   } = options;
+  const dialogs: ExecDialogRecord[] = [];
 
   const origin = `https://${env}.${baseurl}`;
   const targetUrl = resolveSessionUrl(env, url);
@@ -724,9 +833,27 @@ export async function executeInSession(
     await optimizePageForAutomation(page, { blockAssets: shouldBlockAssets });
 
     if (typeof page.on === 'function') {
-      page.on('dialog', async (dialog) => {
+      const pageRef = page;
+      pageRef.on('dialog', async (dialog: puppeteer.Dialog) => {
+        const record: ExecDialogRecord = {
+          type: dialog.type(),
+          message: dialog.message(),
+          defaultValue: dialog.defaultValue(),
+          handled: 'script',
+        };
+        dialogs.push(record);
+        // Yield to a script-registered listener (ours is always registered first).
+        const listenerCount =
+          typeof pageRef.listenerCount === 'function' ? pageRef.listenerCount('dialog') : 1;
+        if (dialogPolicy === 'manual' || listenerCount > 1) return;
         try {
-          await dialog.dismiss();
+          if (dialogPolicy === 'accept') {
+            await dialog.accept();
+            record.handled = 'accepted';
+          } else {
+            await dialog.dismiss();
+            record.handled = 'dismissed';
+          }
         } catch {}
       });
     }
@@ -780,7 +907,7 @@ export async function executeInSession(
       try {
         const meta = await page.evaluate(() => {
           const iframe = document.querySelector<HTMLIFrameElement>(
-            'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+            'iframe#contentFrame, iframe[name="contentFrame"]',
           );
           let innerHref: string | null = null;
           try {
@@ -796,7 +923,7 @@ export async function executeInSession(
         if (!title && meta?.docTitle) {
           title = meta.docTitle;
         }
-        if (meta?.innerHref) {
+        if (meta?.innerHref && meta.innerHref !== 'about:blank') {
           frameUrl = meta.innerHref;
         }
       } catch {}
@@ -818,6 +945,11 @@ export async function executeInSession(
           origin,
           url: finalUrl,
           arg,
+          args: arg,
+          fs,
+          path,
+          os,
+          eb: createNodeEbHelper(page),
           settle: () => waitForEBuilderPageToSettle(page!),
           inspect: () => inspectPage(page!),
         });
@@ -852,6 +984,7 @@ export async function executeInSession(
       cookies: updatedCookies,
       screenshotPath: screenshotPath ?? null,
       httpStatus,
+      dialogs,
     };
   } catch (err: any) {
     if (page) {
@@ -862,7 +995,7 @@ export async function executeInSession(
           const meta = await page
             .evaluate(() => {
               const iframe = document.querySelector<HTMLIFrameElement>(
-                'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+                'iframe#contentFrame, iframe[name="contentFrame"]',
               );
               return iframe?.src || null;
             })

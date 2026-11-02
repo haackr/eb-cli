@@ -508,5 +508,70 @@ describe('Session Commands (src/commands/session/)', () => {
       assert.doesNotMatch(result.error.message, /expired/i);
       assert.strictEqual(db.getSessions().length, 1);
     });
+
+    it('treats a positional local .js path as --script-file and navigates to Home', async () => {
+      db.addSession('script@example.com', 'us1', 'Acct', '[]');
+      const scriptPath = path.join(tmpDir, 'probe.js');
+      fs.writeFileSync(scriptPath, 'module.exports = () => document.title;\n');
+      const navigated: string[] = [];
+      const browser = execMockBrowser({
+        landedUrl: 'https://app.e-builder.net/da2/Home/index2.aspx',
+      });
+      const origCtx = browser.createBrowserContext;
+      browser.createBrowserContext = async () => {
+        const ctx = await origCtx();
+        const origPage = ctx.newPage;
+        ctx.newPage = async () => {
+          const p = await origPage();
+          p.goto = async (u: string) => {
+            navigated.push(u);
+          };
+          return p;
+        };
+        return ctx;
+      };
+      eb.BrowserManager.getInstance().getBrowser = async () => browser;
+
+      const result: any = await SessionExec.run([scriptPath, '--session-id', '1', '--json']);
+      assert.strictEqual(result.success, true);
+      assert.deepStrictEqual(navigated, ['https://app.e-builder.net/da2/Home/index2.aspx']);
+    });
+
+    it('accepts --file and --url aliases', async () => {
+      db.addSession('alias@example.com', 'us1', 'Acct', '[]');
+      const scriptPath = path.join(tmpDir, 'alias.js');
+      fs.writeFileSync(scriptPath, '() => 1');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({ landedUrl: 'https://app.e-builder.net/da2/Reports/index.aspx' });
+
+      const result: any = await SessionExec.run([
+        '--url',
+        '/da2/Reports/index.aspx',
+        '--file',
+        scriptPath,
+        '--session-id',
+        '1',
+        '--json',
+      ]);
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.url, 'https://app.e-builder.net/da2/Reports/index.aspx');
+    });
+
+    it('selects the session by --account substring', async () => {
+      db.addSession('mark@example.com', 'us3', 'Project Mark - Production', '[]');
+      db.addSession('mark@example.com', 'us3', 'Project Mark - UAT', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({ landedUrl: 'https://app-us3.e-builder.net/da2/Home/index2.aspx' });
+
+      const uat: any = await SessionExec.run(['--account', 'uat', '--json']);
+      assert.strictEqual(uat.session.account, 'Project Mark - UAT');
+      const prod: any = await SessionExec.run(['-A', 'PROD', '--json']);
+      assert.strictEqual(prod.session.account, 'Project Mark - Production');
+
+      const missing: any = await SessionExec.run(['--account', 'sandbox', '--json']);
+      assert.strictEqual(missing.success, false);
+      assert.match(missing.error.message, /No sessions found matching account "sandbox"/);
+      assert.match(missing.error.message, /Project Mark - UAT/);
+    });
   });
 });
