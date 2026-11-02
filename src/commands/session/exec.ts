@@ -17,7 +17,7 @@ export default class SessionExec extends BaseSessionCommand {
   static override summary =
     'Execute JavaScript or Puppeteer automation in an authenticated e-Builder session';
   static override description =
-    'Navigate to an e-Builder path or URL using a stored session (headless by default) and evaluate a DOM or Puppeteer script. Automatically resolves environment URLs and refreshes session cookies.';
+    'Navigate to an e-Builder path or URL using a stored session (headless by default) and evaluate a DOM or Puppeteer script. Automatically resolves environment URLs, verifies the session on the target navigation, and saves refreshed cookies. Errors report a typed code (SessionExpiredError, NetworkError, NavigationTimeoutError) so network problems are not mistaken for logouts.';
   static override examples = [
     '<%= config.bin %> <%= command.id %> /da2/Processes/ProcessesView.aspx --eval "document.title" --json',
     '<%= config.bin %> <%= command.id %> /da2/Setup/Processes/ProcessTypesView.aspx --script-file extract-types.js --json',
@@ -94,22 +94,38 @@ export default class SessionExec extends BaseSessionCommand {
       const headless = !flags['show-browser'];
       session = await this.getSession(flags);
       env = eb.getEnvironment(session.environment);
-      const cookies = await this.getSessionCookies(session.id, headless);
+      // No pre-flight browser check: executeInSession verifies auth on the target navigation
+      // itself and returns refreshed cookies, saving a full extra page load per invocation.
+      const storedCookies = await this.getSessionCookies(session.id, headless, {
+        skipRefresh: true,
+      });
       const parsedArg = parseArgValue(flags.arg);
 
-      const execResult = await eb.executeInSession({
-        env,
-        cookies,
-        headless,
-        url: args.url,
-        waitForSelector: flags['wait-for'],
-        script: scriptContent,
-        mode: flags.puppeteer ? 'puppeteer' : 'dom',
-        arg: parsedArg,
-        screenshotPath: flags.screenshot,
-        screenshotOnFailure: flags['screenshot-on-failure'],
-        inspect: flags.inspect,
-      });
+      const runExec = (cookies: any[]) =>
+        eb.executeInSession({
+          env: env!,
+          cookies,
+          headless,
+          url: args.url,
+          waitForSelector: flags['wait-for'],
+          script: scriptContent,
+          mode: flags.puppeteer ? 'puppeteer' : 'dom',
+          arg: parsedArg,
+          screenshotPath: flags.screenshot,
+          screenshotOnFailure: flags['screenshot-on-failure'],
+          inspect: flags.inspect,
+        });
+
+      let execResult: eb.ExecuteInSessionResult;
+      try {
+        execResult = await runExec(storedCookies);
+      } catch (err: any) {
+        if (err?.reason !== 'redirected_to_login') throw err;
+        // Cookies were rejected: try an autonomous re-login (1Password/Bitwarden) once.
+        const relogged = await this.reloginWithCredentialProvider(session.id, headless);
+        if (!relogged) throw err;
+        execResult = await runExec(relogged);
+      }
 
       if (execResult.cookies && execResult.cookies.length > 0) {
         db.updateSessionCookies(session.id, JSON.stringify(execResult.cookies));
@@ -151,6 +167,7 @@ export default class SessionExec extends BaseSessionCommand {
           success: false,
           error: {
             code: err.code || err.name || 'EXECUTION_FAILED',
+            reason: err.reason,
             message: err.message || 'Execution in session failed',
             stack: err.stack,
           },

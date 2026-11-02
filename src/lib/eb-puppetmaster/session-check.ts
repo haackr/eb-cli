@@ -131,16 +131,34 @@ export function isLoginUrl(rawUrl: string | undefined | null): boolean {
 export async function pageShowsLoginForm(page: puppeteer.Page): Promise<boolean> {
   if (typeof page.evaluate !== 'function') return false;
   try {
-    return await page.evaluate(() =>
+    const found = await page.evaluate(() =>
       Boolean(
         document.querySelector(
           '#ctl00_ContentPlaceHolder1_txtUserName, #txtUserName, #txtUsername, input[name*="txtUserName"], input[name*="txtPassword"]',
         ),
       ),
     );
+    return found === true;
   } catch {
     return false;
   }
+}
+
+/**
+ * True when the page has landed on a login / identity-provider URL, or an e-Builder page
+ * that renders the login form in place. Pages on other hosts are never DOM-probed.
+ */
+export async function detectLoginPage(page: puppeteer.Page): Promise<boolean> {
+  const landed = safePageUrl(page);
+  if (isLoginUrl(landed)) return true;
+  let host: string;
+  try {
+    host = new URL(landed ?? '').hostname;
+  } catch {
+    return false;
+  }
+  if (!/(^|\.)e-builder\.(net|ca)$/i.test(host)) return false;
+  return await pageShowsLoginForm(page);
 }
 
 export function safePageUrl(page: puppeteer.Page | null | undefined): string | undefined {

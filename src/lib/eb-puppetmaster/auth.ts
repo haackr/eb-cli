@@ -6,7 +6,7 @@ import { Environment, baseurl, BrowserManager } from './index.js';
 import {
   classifyNavigationError,
   isLoginUrl,
-  pageShowsLoginForm,
+  detectLoginPage,
   safePageUrl,
   type SessionCheckResult,
 } from './session-check.js';
@@ -1166,7 +1166,7 @@ export async function isLoggedIn(
       };
     }
 
-    if (isLoginUrl(landedUrl) || (await pageShowsLoginForm(page))) {
+    if (await detectLoginPage(page)) {
       return { isLoggedIn: false, reason: 'redirected_to_login', landedUrl, newCookies: [] };
     }
 

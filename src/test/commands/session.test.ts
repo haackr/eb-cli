@@ -416,5 +416,97 @@ describe('Session Commands (src/commands/session/)', () => {
       assert.ok(result.error);
       assert.match(result.error.message, /Navigation failed/);
     });
+
+    const execMockBrowser = (opts: {
+      landedUrl: string;
+      gotoError?: Error;
+      contexts?: { count: number };
+    }): any => ({
+      connected: true,
+      createBrowserContext: async () => {
+        if (opts.contexts) opts.contexts.count++;
+        return {
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            on: () => {},
+            goto: async () => {
+              if (opts.gotoError) throw opts.gotoError;
+            },
+            url: () => opts.landedUrl,
+            title: async () => 'Page',
+            waitForSelector: async () => ({}),
+            waitForFunction: async () => ({}),
+            waitForNetworkIdle: async () => ({}),
+            evaluate: async () => ({ docTitle: 'Page', innerHref: null }),
+            close: async () => {},
+          }),
+          setCookie: async () => {},
+          cookies: async () => [{ name: 'sid', value: 'fresh' }],
+          close: async () => {},
+        };
+      },
+    });
+
+    it('uses a single browser context (no pre-flight session check)', async () => {
+      db.addSession(
+        'fast@example.com',
+        'us1',
+        'Acct',
+        JSON.stringify([{ name: 'sid', value: 'old' }]),
+      );
+      const contexts = { count: 0 };
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({ landedUrl: 'https://app.e-builder.net/da2/Home/index2.aspx', contexts });
+
+      const result: any = await SessionExec.run(['--session-id', '1', '--json']);
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(contexts.count, 1);
+      assert.deepStrictEqual(JSON.parse(db.getSessionById(1)!.session_cookies), [
+        { name: 'sid', value: 'fresh' },
+      ]);
+    });
+
+    it('reports SessionExpiredError when the target navigation lands on a login page', async () => {
+      db.addSession(
+        'expired@example.com',
+        'us1',
+        'Acct',
+        JSON.stringify([{ name: 'sid', value: 'old' }]),
+      );
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({
+          landedUrl: 'https://app.e-builder.net/Login/Login.aspx?ReturnUrl=%2fda2',
+        });
+
+      const result: any = await SessionExec.run(['--session-id', '1', '--json']);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.error.code, 'SessionExpiredError');
+      assert.strictEqual(result.error.reason, 'redirected_to_login');
+      assert.deepStrictEqual(JSON.parse(db.getSessionById(1)!.session_cookies), [
+        { name: 'sid', value: 'old' },
+      ]);
+    });
+
+    it('reports NetworkError (not session expiry) when e-Builder is unreachable', async () => {
+      db.addSession(
+        'sandboxed@example.com',
+        'us1',
+        'Acct',
+        JSON.stringify([{ name: 'sid', value: 'old' }]),
+      );
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({
+          landedUrl: 'about:blank',
+          gotoError: new Error('net::ERR_NAME_NOT_RESOLVED at https://app.e-builder.net/'),
+        });
+
+      const result: any = await SessionExec.run(['--session-id', '1', '--json']);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.error.code, 'NetworkError');
+      assert.match(result.error.message, /NOT invalidated/);
+      assert.doesNotMatch(result.error.message, /expired/i);
+      assert.strictEqual(db.getSessions().length, 1);
+    });
   });
 });

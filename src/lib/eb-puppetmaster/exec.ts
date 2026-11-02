@@ -1,6 +1,14 @@
 import * as path from 'path';
 import * as os from 'os';
 import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';
+import {
+  classifyNavigationError,
+  detectLoginPage,
+  safePageUrl,
+  SessionCheckError,
+  sessionCheckErrorFor,
+  type SessionCheckReason,
+} from './session-check.js';
 
 export type ExecuteInSessionMode = 'dom' | 'puppeteer';
 
@@ -46,6 +54,10 @@ export class ExecuteInSessionError extends Error {
   public title?: string | undefined;
   public frameUrl?: string | null | undefined;
   public screenshotPath?: string | null | undefined;
+  /** Machine-readable error code, e.g. SessionExpiredError, NetworkError, EXECUTION_FAILED. */
+  public code: string = 'EXECUTION_FAILED';
+  /** Set when the failure was a classified session/navigation problem. */
+  public reason?: SessionCheckReason | undefined;
 
   constructor(
     message: string,
@@ -65,6 +77,10 @@ export class ExecuteInSessionError extends Error {
       this.frameUrl = details.frameUrl;
       this.screenshotPath = details.screenshotPath;
       if (details.cause) this.cause = details.cause;
+      if (details.cause instanceof SessionCheckError) {
+        this.code = details.cause.code;
+        this.reason = details.cause.reason;
+      }
     }
   }
 }
@@ -83,6 +99,12 @@ export type ExecuteInSessionOptions = {
   screenshotOnFailure?: boolean | undefined;
   inspect?: boolean | undefined;
   blockAssets?: boolean | undefined;
+  /**
+   * Verify the target navigation did not land on a login page (default: true). This replaces
+   * a separate pre-flight session check: loading any authenticated page already extends the
+   * ASP.NET sliding session, and the refreshed cookies are returned in the result.
+   */
+  verifyAuth?: boolean | undefined;
 };
 
 export type ExecuteInSessionResult = {
@@ -93,6 +115,8 @@ export type ExecuteInSessionResult = {
   inspection?: PageInspectionResult | undefined;
   cookies: puppeteer.Cookie[];
   screenshotPath: string | null;
+  /** HTTP status of the main navigation response, when available. */
+  httpStatus?: number | undefined;
 };
 
 export type PuppeteerExecContext = {
@@ -673,6 +697,7 @@ export async function executeInSession(
     screenshotOnFailure = true,
     inspect = false,
     blockAssets,
+    verifyAuth = true,
   } = options;
 
   const origin = `https://${env}.${baseurl}`;
@@ -706,8 +731,36 @@ export async function executeInSession(
       });
     }
 
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+    let httpStatus: number | undefined;
+    try {
+      const response = await page.goto(targetUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 90_000,
+      });
+      httpStatus = typeof response?.status === 'function' ? response.status() : undefined;
+    } catch (navErr) {
+      const reason = classifyNavigationError(navErr);
+      if (reason) {
+        throw sessionCheckErrorFor(
+          {
+            reason,
+            errorMessage: navErr instanceof Error ? navErr.message : String(navErr),
+            landedUrl: safePageUrl(page),
+          },
+          origin,
+          navErr,
+        );
+      }
+      throw navErr;
+    }
     await waitForEBuilderPageToSettle(page);
+
+    if (verifyAuth && (await detectLoginPage(page))) {
+      throw sessionCheckErrorFor(
+        { reason: 'redirected_to_login', landedUrl: safePageUrl(page) },
+        origin,
+      );
+    }
 
     if (waitForSelector) {
       await waitForSelectorInPageOrFrame(page, waitForSelector);
@@ -798,6 +851,7 @@ export async function executeInSession(
       inspection,
       cookies: updatedCookies,
       screenshotPath: screenshotPath ?? null,
+      httpStatus,
     };
   } catch (err: any) {
     if (page) {
