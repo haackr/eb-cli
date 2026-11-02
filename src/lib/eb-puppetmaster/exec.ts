@@ -640,6 +640,127 @@ const inBrowserEbHelper = `
           rows.push(rowObj);
         }
         return { headers: headers, rowCount: trs.length, rows: rows };
+      },
+      _resolveForm: function(docOrForm) {
+        var src = docOrForm;
+        if (typeof src === 'string') {
+          src = this.getContentDocument().querySelector(src);
+          if (!src) throw new Error('eb.buildFormParams: no element matches ' + docOrForm);
+        }
+        if (!src) src = this.getContentDocument();
+        if (src.tagName && src.tagName.toUpperCase() === 'FORM') return src;
+        var doc = src.nodeType === 9 ? src : (src.ownerDocument || document);
+        var form = doc.getElementById('aspnetForm') || doc.forms[0];
+        if (!form) throw new Error('eb.buildFormParams: no <form> found');
+        return form;
+      },
+      _fieldName: function(form, shortName) {
+        // ASP.NET prefixes control names (ctl00$ContentPlaceHolder1$btnSave); match either form.
+        var els = form.elements;
+        for (var i = 0; i < els.length; i++) {
+          var n = els[i].name || '';
+          if (n === shortName) return n;
+        }
+        for (var j = 0; j < els.length; j++) {
+          var m = els[j].name || '';
+          if (m.slice(-(shortName.length + 1)) === '$' + shortName) return m;
+        }
+        return shortName;
+      },
+      /**
+       * Serializes an ASP.NET WebForms form (incl. __VIEWSTATE / __EVENTVALIDATION) the way the
+       * browser would, for fast fetch() postbacks. Overrides match full or short control names;
+       * a null override removes the field.
+       */
+      buildFormParams: function(docOrForm, overrides, eventTarget, eventArg) {
+        var form = this._resolveForm(docOrForm);
+        var params = new URLSearchParams();
+        var els = form.elements;
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          if (!el.name || el.disabled) continue;
+          var type = (el.type || '').toLowerCase();
+          if (type === 'submit' || type === 'button' || type === 'image' || type === 'reset' || type === 'file') continue;
+          if ((type === 'checkbox' || type === 'radio') && !el.checked) continue;
+          if (type === 'select-multiple') {
+            for (var o = 0; o < el.options.length; o++) {
+              if (el.options[o].selected) params.append(el.name, el.options[o].value);
+            }
+            continue;
+          }
+          params.append(el.name, el.value);
+        }
+        if (eventTarget !== undefined && eventTarget !== null) {
+          params.set('__EVENTTARGET', eventTarget);
+          params.set('__EVENTARGUMENT', eventArg || '');
+        }
+        var o2 = overrides || {};
+        for (var key in o2) {
+          if (!Object.prototype.hasOwnProperty.call(o2, key)) continue;
+          var name = this._fieldName(form, key);
+          if (o2[key] === null) params.delete(name);
+          else params.set(name, String(o2[key]));
+        }
+        return params;
+      },
+      /** POSTs a WebForms form via fetch(). Resolves { url, status, html, doc }. */
+      postWebForm: function(url, docOrForm, overrides, eventTarget, eventArg) {
+        var form = this._resolveForm(docOrForm);
+        var params = this.buildFormParams(form, overrides, eventTarget, eventArg);
+        var base = (form.ownerDocument && form.ownerDocument.location && form.ownerDocument.location.href) || location.href;
+        if (base === 'about:blank') base = location.href;
+        var target = new URL(url || form.getAttribute('action') || base, base).href;
+        return fetch(target, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString()
+        }).then(function(r) {
+          return r.text().then(function(html) {
+            return { url: r.url, status: r.status, html: html, doc: new DOMParser().parseFromString(html, 'text/html') };
+          });
+        });
+      },
+      _fetchText: function(url, init) {
+        return fetch(url, Object.assign({ credentials: 'include' }, init || {})).then(function(r) {
+          return r.text().then(function(text) {
+            if (!r.ok) throw new Error('HTTP ' + r.status + ' from ' + url);
+            if (/\\/login(\\/|\\.aspx)/i.test(r.url) || /id\\.trimble\\.com/i.test(r.url)) {
+              throw new Error('Session expired: redirected to ' + r.url);
+            }
+            return { text: text, contentType: r.headers.get('content-type') || '', url: r.url };
+          });
+        });
+      },
+      /** Downloads a workflow definition (.ebw XML) by WorkflowID GUID. */
+      downloadWorkflowXml: function(workflowId) {
+        var url = location.origin + '/da2/Setup/Admin/Processes/Workflows/DownloadWorkflowHandler.ashx?WorkflowID=' + encodeURIComponent(workflowId);
+        return this._fetchText(url).then(function(res) {
+          if (/text\\/html/i.test(res.contentType) && !/^\\s*<\\?xml/i.test(res.text)) {
+            throw new Error('Workflow download returned HTML instead of XML (check the WorkflowID)');
+          }
+          return res.text;
+        });
+      },
+      /** Runs a custom report and returns its full CSV export by ReportID GUID. */
+      exportReportCsv: function(reportId) {
+        var self = this;
+        var url = location.origin + '/da2/Reports/ReportResults.aspx?ReportID=' + encodeURIComponent(reportId);
+        return this._fetchText(url).then(function(res) {
+          var doc = new DOMParser().parseFromString(res.text, 'text/html');
+          var form = self._resolveForm(doc);
+          var params = self.buildFormParams(form, { rblExportTypes: '5', btnExportType: 'Export' });
+          return self._fetchText(res.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+          });
+        }).then(function(res) {
+          if (/text\\/html/i.test(res.contentType) && /<html/i.test(res.text)) {
+            throw new Error('Report export returned HTML instead of CSV (check the ReportID or export options)');
+          }
+          return res.text;
+        });
       }
     };
   })();
@@ -773,7 +894,13 @@ function createNodeEbHelper(
             if (!helper || typeof helper[m] !== 'function') {
               throw new Error(`eb.${m} is not a function`);
             }
-            return await helper[m](...a);
+            const out = await helper[m](...a);
+            if (out instanceof URLSearchParams) return out.toString();
+            if (out && typeof out === 'object' && 'doc' in out && out.doc instanceof Document) {
+              const { doc: _doc, ...rest } = out;
+              return rest;
+            }
+            return out;
           },
           method,
           callArgs,

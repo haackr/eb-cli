@@ -5,6 +5,7 @@ import { z } from 'zod';
 import * as eb from '../lib/eb-puppetmaster/index.js';
 import * as db from '../lib/db.js';
 import { refreshSessionIfNeeded } from '../lib/login-helper.js';
+import { STANDARD_PATHS } from './agent/guide.js';
 
 export default class McpCommand extends Command {
   static override description =
@@ -534,13 +535,11 @@ export default class McpCommand extends Command {
       {},
       async () => {
         const guide = {
-          standardPaths: {
-            home: '/da2/Home/index2.aspx',
-            processesView: '/da2/Processes/ProcessesView.aspx',
-            processTypesView: '/da2/Setup/Processes/ProcessTypesView.aspx',
-            importProcesses: '/da2/Processes/ImportProcesses/ImportProcesses.aspx',
-            manageUsers: '/da2/Users/ManageUsers.aspx',
-            apiLogs: '/da2/ApiLogs/ApiLogs.aspx',
+          standardPaths: STANDARD_PATHS,
+          scriptSyntax: {
+            dom: '(arg, eb) => ... or a bare expression',
+            puppeteer:
+              'async ({ page, browser, context, env, origin, url, arg, args, fs, path, os, eb, settle, inspect }) => ... (no export default / module.exports needed)',
           },
           browserHelperMethods: {
             'eb.getContentDocument()': 'Returns #contentFrame document or top document',
@@ -549,6 +548,18 @@ export default class McpCommand extends Command {
             'eb.setRadComboBox(idOrName, valueOrText)':
               'Selects RadComboBox item and fires change events',
             'eb.getTable(selectorOrId, maxRows)': 'Scrapes table into { headers, rowCount, rows }',
+            'eb.buildFormParams(formOrSelector?, overrides?, eventTarget?, eventArg?)':
+              'Serializes ASP.NET form (__VIEWSTATE etc.) to URLSearchParams',
+            'eb.postWebForm(url?, formOrSelector?, overrides?, eventTarget?, eventArg?)':
+              'fetch() postback resolving { url, status, html }',
+            'eb.downloadWorkflowXml(workflowId)': 'Returns .ebw workflow XML',
+            'eb.exportReportCsv(reportId)': 'Returns full custom report CSV',
+          },
+          errorCodes: {
+            SessionExpiredError: 'Redirected to login: user must re-authenticate.',
+            NetworkError: 'e-Builder unreachable (often a sandbox). Session is still valid.',
+            NavigationTimeoutError: 'Timed out. Retry; session still valid.',
+            ServerError: 'HTTP 5xx. Retry later; session still valid.',
           },
           safetyGuardrails: [
             'Read-only by default in live environments.',
