@@ -111,6 +111,8 @@ export default class AgentGuide extends Command {
         browserDaemon: {
           description:
             'Before running many eb commands in a row, run "eb daemon start" to reuse one warm headless browser (each command still gets an isolated context; it exits after 15 idle minutes). "eb daemon stop" ends it.',
+          sandboxes:
+            "If your tool runner kills child processes when each command finishes, start the daemon with the runner's background/daemon option so the browser survives between commands; otherwise it is reaped immediately and every command falls back to launching its own browser.",
         },
         dialogs: {
           description:
@@ -198,7 +200,7 @@ eb session exec --account prod --url /da2/Processes/ProcessesMain.aspx --file sc
 \`\`\`
 Puppeteer mode is auto-detected; \`--puppeteer\` / \`--no-puppeteer\` force it. Dialogs are dismissed by default (\`--dialog-policy accept|dismiss|manual\`).
 
-For loops of many commands, run \`eb daemon start\` first to reuse a warm headless browser.
+For loops of many commands, run \`eb daemon start\` first to reuse a warm headless browser. If your tool runner kills child processes after each command, launch it with the runner's background/daemon option so it persists.
 
 ### Working with processes (start, act, set fields)
 \`\`\`bash

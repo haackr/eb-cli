@@ -62,11 +62,21 @@ function formHelper(): void {
   type Row = { label: string; required: boolean; cell: Element; dataFieldId?: string };
 
   const rows = (): Row[] => {
+    // Embedded sub-controls (commitment / line-item pickers and their search bars) render
+    // their own td.Label cells inside the data-fields section; they are not data fields.
+    const SUB_CONTROL =
+      '[id*="LineItemsControl"], [id*="CommitmentControl"], [id*="ucEquipmentItems"], [id*="RadAjaxPanel"], [id*="ucItemCF"]';
     const labels = Array.from(
       document.querySelectorAll(
         '[id$="_dataFields"] td.Label, #ctl00_contentSection_dataFields td.Label',
       ),
-    );
+    ).filter((lab) => {
+      // Only sub-controls *inside* the data-fields container count; a wrapper around the
+      // whole section (e.g. a page-level RadAjaxPanel) must not hide every field.
+      const container = lab.closest('[id$="_dataFields"]');
+      const sub = lab.closest(SUB_CONTROL);
+      return !(sub && container && sub !== container && container.contains(sub));
+    });
     return Array.from(new Set(labels))
       .map((lab) => {
         const cell = (lab.nextElementSibling as Element | null) ?? lab.parentElement!;
@@ -173,12 +183,28 @@ function formHelper(): void {
     const text = controls.find((e) => e instanceof HTMLInputElement);
     if (text)
       return { ...base, type: 'text', value: text.value || null, editable: enabled.includes(text) };
-    // Read-only rendering: value span (often id = DataFieldID) or the cell text.
-    const span = r.dataFieldId ? document.getElementById(`{${r.dataFieldId}}`) : null;
+    // Read-only rendering: the value span's id ends with "{DataFieldID}" (often prefixed with
+    // ctl00_contentSection_ or ctl00_contentSection_lbl) or its name is "{DataFieldID}".
+    // Without one, read the cell minus help-text <div>s and [Lookup]/[Remove] action links.
+    const span = r.dataFieldId
+      ? cell.querySelector<HTMLElement>(
+          `span[id$="{${r.dataFieldId}}"], span[name="{${r.dataFieldId}}"]`,
+        )
+      : null;
+    let rawText = '';
+    if (span) {
+      rawText = span.textContent ?? '';
+    } else {
+      const clone = cell.cloneNode(true) as HTMLElement;
+      clone
+        .querySelectorAll('div, a[href^="javascript:"], a[onclick], script, style')
+        .forEach((el) => el.remove());
+      rawText = clone.textContent ?? '';
+    }
     return {
       ...base,
       type: 'readonly',
-      value: clean((span ?? cell).textContent) || null,
+      value: clean(rawText) || null,
       editable: false,
     };
   };

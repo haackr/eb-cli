@@ -53,15 +53,15 @@ export default class ReportsList extends BaseSessionCommand {
 
     if (!items) {
       const headless = !flags['show-browser'];
-      const cookies = await this.getSessionCookies(session.id, headless);
-
       try {
-        items = await fetchReportCatalog({
-          env,
-          cookies,
-          account: session.account,
-          useCache: false,
-        });
+        items = await this.withSessionCookies(session.id, headless, (cookies) =>
+          fetchReportCatalog({
+            env,
+            cookies,
+            account: session.account,
+            useCache: false,
+          }),
+        );
       } finally {
         await eb.BrowserManager.getInstance().closeBrowser();
       }

@@ -64,16 +64,16 @@ export default class ProcessInspect extends BaseSessionCommand {
     }
 
     const headless = !flags['show-browser'];
-    const cookies = await this.getSessionCookies(session.id, headless);
-
     try {
-      const schema = await fetchProcessSchema({
-        env,
-        cookies,
-        processName: args.process,
-        account: session.account,
-        useCache: false,
-      });
+      const schema = await this.withSessionCookies(session.id, headless, (cookies) =>
+        fetchProcessSchema({
+          env,
+          cookies,
+          processName: args.process,
+          account: session.account,
+          useCache: false,
+        }),
+      );
 
       const out = flags.compact ? compactProcessSchema(schema) : schema;
       if (this.jsonEnabled()) {

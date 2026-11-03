@@ -69,6 +69,30 @@ describe('Process Schema & Caching (src/lib/eb-puppetmaster/process-schema.ts)',
     assert.ok(retrieved.cachedAt);
   });
 
+  it('caches under name, prefix, variable name, and ID, across short and subdomain env names', () => {
+    const schema = {
+      name: 'Request For Information',
+      prefix: 'RFI',
+      variableName: 'Process_RFI',
+      processId: 'aaaaaaaa-0000-4000-8000-000000000001',
+      workflowSteps: [],
+      dataFields: [],
+      layoutMatrix: {},
+    };
+    saveCachedProcessSchema('app-us2', 'Acct', 'request for info', schema as any);
+    for (const key of [
+      'RFI',
+      'process_rfi',
+      'Request For Information',
+      '{AAAAAAAA-0000-4000-8000-000000000001}',
+      'request for info',
+    ]) {
+      assert.strictEqual(getCachedProcessSchema('us2', 'Acct', key)?.prefix, 'RFI', key);
+    }
+    assert.strictEqual(getCachedProcessSchema('us2', 'Acct', 'Submittal'), undefined);
+    assert.strictEqual(getCachedProcessSchema('us2', 'Other', 'RFI'), undefined);
+  });
+
   it('ProcessInspect command returns cached schema instantly with --cached and --json', async () => {
     db.addSession('alice@example.com', 'us1', 'Acct1', '[]');
     const cachedData: ProcessSchema = {

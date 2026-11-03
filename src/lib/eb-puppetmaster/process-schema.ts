@@ -2,6 +2,10 @@ import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from 
 import { injectEbHelper, waitForEBuilderPageToSettle } from './exec.js';
 import { detectLoginPage, sessionCheckErrorFor } from './session-check.js';
 import * as db from '../db.js';
+import { envMap } from './index.js';
+
+/** Cache key for an environment: accepts the short name ("us2") or the subdomain ("app-us2"). */
+const envKey = (env: string) => envMap[env] ?? env;
 
 export interface ProcessDataFieldSchema {
   id?: string | undefined;
@@ -69,32 +73,63 @@ export interface ProcessSchema {
   cachedAt?: string | undefined;
 }
 
+const cacheKey = (k: string) =>
+  k
+    .toLowerCase()
+    .trim()
+    .replace(/^\{|\}$/g, '');
+
+/** True when a cached schema is the process the caller asked for (by name, prefix, variable name, or ID). */
+function schemaMatches(schema: ProcessSchema, requested: string): boolean {
+  const r = cacheKey(requested);
+  return [schema.name, schema.prefix, schema.variableName, schema.processId, schema.processTypeId]
+    .filter((k): k is string => Boolean(k))
+    .some((k) => cacheKey(k) === r);
+}
+
 export function getCachedProcessSchema(
   env: string,
   account: string,
   processName: string,
 ): ProcessSchema | undefined {
-  const json = db.getCachedSchema(env, account, 'process', processName.toLowerCase().trim());
+  const json = db.getCachedSchema(envKey(env), account, 'process', cacheKey(processName));
   if (!json) return undefined;
   try {
-    return JSON.parse(json) as ProcessSchema;
+    const schema = JSON.parse(json) as ProcessSchema;
+    // Entries are stored under several identifiers; a key can collide (one process's name
+    // equal to another's prefix). Only use the entry if it identifies this exact process,
+    // or it was cached for this exact request (e.g. a unique partial name).
+    const storedFor = (schema as ProcessSchema & { cachedFor?: string }).cachedFor;
+    return schemaMatches(schema, processName) ||
+      (storedFor && cacheKey(storedFor) === cacheKey(processName))
+      ? schema
+      : undefined;
   } catch {
     return undefined;
   }
 }
 
+/**
+ * Caches the schema under the requested identifier and under its name, prefix, variable name,
+ * and ProcessID, so later lookups by any of them hit the cache.
+ */
 export function saveCachedProcessSchema(
   env: string,
   account: string,
   processName: string,
   schema: ProcessSchema,
 ): void {
-  const normalizedKey = processName.toLowerCase().trim();
-  const payload = {
+  const payload = JSON.stringify({
     ...schema,
     cachedAt: new Date().toISOString(),
-  };
-  db.setCachedSchema(env, account, 'process', normalizedKey, JSON.stringify(payload));
+    cachedFor: processName,
+  });
+  const keys = new Set(
+    [processName, schema.name, schema.prefix, schema.variableName, schema.processId]
+      .filter((k): k is string => Boolean(k && k.trim()))
+      .map(cacheKey),
+  );
+  for (const key of keys) db.setCachedSchema(envKey(env), account, 'process', key, payload);
 }
 
 /** Maximum number of page layouts whose XML is fetched for the layout matrix. */
@@ -193,9 +228,16 @@ export async function fetchProcessSchema(options: {
           ...r,
           id: r.hrefs.map((h) => guidOf(h, 'ProcessID')).find(Boolean) ?? '',
           name: r.cells['Name'] ?? '',
+          prefix: r.cells['Prefix'] ?? '',
+          variableName: r.cells['Variable Name'] ?? '',
         }));
         const t = target.trim().toLowerCase().replace(/[{}]/g, '');
+        // ID or exact name first, then exact prefix / variable name, then a unique partial name.
         let matches = processes.filter((p) => p.id === t || p.name.toLowerCase() === t);
+        if (matches.length === 0)
+          matches = processes.filter(
+            (p) => p.prefix.toLowerCase() === t || p.variableName.toLowerCase() === t,
+          );
         if (matches.length === 0)
           matches = processes.filter((p) => p.name.toLowerCase().includes(t));
         if (matches.length !== 1) {
@@ -203,7 +245,7 @@ export async function fetchProcessSchema(options: {
             error:
               matches.length === 0
                 ? `Process "${target}" not found (${processes.length} processes in this account)`
-                : `Process "${target}" is ambiguous: ${matches.map((m) => m.name).join(', ')}`,
+                : `Process "${target}" is ambiguous: ${matches.map((m) => `${m.name} (${m.prefix})`).join(', ')}`,
           };
         }
         const proc = matches[0]!;

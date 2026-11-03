@@ -228,9 +228,83 @@ export async function listStartableProcesses(
 // ---------------------------------------------------------------------------
 
 /** Lists the instances shown on the project's Processes page (its default view: open ones). */
+export type InstanceStatusFilter = 'open' | 'closed' | 'draft' | 'all';
+
+const CHIP_FLAGS: Record<
+  InstanceStatusFilter,
+  { InProgress: boolean; Completed: boolean; Draft: boolean }
+> = {
+  open: { InProgress: true, Completed: false, Draft: false },
+  closed: { InProgress: false, Completed: true, Draft: false },
+  draft: { InProgress: false, Completed: false, Draft: true },
+  all: { InProgress: true, Completed: true, Draft: true },
+};
+
+/**
+ * Applies the project Processes page's state filter. The page keeps it in a hidden JSON field
+ * (chipSelection: InProgress / Completed / Draft / InMyCourt / ...) applied by a btnFilter
+ * postback. Returns the original selection so it can be restored (e-Builder may remember it).
+ */
+async function applyInstanceFilter(
+  page: puppeteer.Page,
+  status: InstanceStatusFilter,
+): Promise<string | null> {
+  const original = await page.evaluate(
+    () => document.querySelector<HTMLInputElement>('[id$="_chipSelection"]')?.value ?? null,
+  );
+  if (original === null) {
+    if (status === 'open') return null;
+    throw new ProcessInstanceError(
+      'This e-Builder version has no process state filter; only open instances can be listed',
+    );
+  }
+  const decoded = original.replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+  let current: Record<string, unknown>;
+  try {
+    current = JSON.parse(decoded);
+  } catch {
+    throw new ProcessInstanceError('Could not read the process state filter');
+  }
+  const flags = CHIP_FLAGS[status];
+  const same = (Object.keys(flags) as Array<keyof typeof flags>).every(
+    (k) => current[k] === flags[k],
+  );
+  if (same) return null;
+  await submitInstanceFilter(page, JSON.stringify({ ...current, ...flags }));
+  return original;
+}
+
+async function submitInstanceFilter(page: puppeteer.Page, selection: string): Promise<void> {
+  const { postback } = await import('./report-wizard.js');
+  await postback(page, () =>
+    page.evaluate((value: string) => {
+      const field = document.querySelector<HTMLInputElement>('[id$="_chipSelection"]')!;
+      field.value = value;
+      const btn = document.querySelector<HTMLElement>('[id$="_btnFilter"]');
+      const target =
+        (btn?.getAttribute('name') ?? btn?.id.replace(/_/g, '$')) ||
+        'ctl00$ctl00$ContentPlaceHolder1$contentSection$btnFilter';
+      // ASP.NET AJAX's __doPostBack walks the caller chain, which fails from strict-mode code;
+      // a string setTimeout runs it on a fresh stack, like the page's own handlers.
+      window.setTimeout(`__doPostBack('${target}','')`, 0);
+    }, selection),
+  );
+}
+
+/** Lists the project's instances: open (default), closed, draft, or all. */
 export async function listProcessInstances(
-  options: Opts & { project: string; process?: string | undefined; search?: string | undefined },
-): Promise<{ project: ProjectRef; instances: ProcessInstanceSummary[] }> {
+  options: Opts & {
+    project: string;
+    process?: string | undefined;
+    search?: string | undefined;
+    status?: InstanceStatusFilter | undefined;
+  },
+): Promise<{
+  project: ProjectRef;
+  status: InstanceStatusFilter;
+  instances: ProcessInstanceSummary[];
+}> {
+  const status = options.status ?? 'open';
   return await withSessionPage(options, async (page, origin) => {
     const project = await resolveProjectOnPage(page, origin, options.project);
     await gotoAuthenticated(
@@ -238,17 +312,27 @@ export async function listProcessInstances(
       `${origin}/da2/Processes/ProjectProcesses.aspx?PortalID={${project.id}}`,
       origin,
     );
+    const original = await applyInstanceFilter(page, status);
     let instances = await page.evaluate(() => {
       const table = document.querySelector<any>('modus-table');
       const rows: Array<Record<string, any>> = table?.data ?? [];
+      // modus-table data is HTML-encoded ("FP&amp;A Review"); decode like the page does.
+      const txt = document.createElement('textarea');
+      const decode = (v: unknown) => {
+        if (typeof v !== 'string' || !v.includes('&')) return v;
+        txt.innerHTML = v;
+        return txt.value;
+      };
       const flat = (v: any) =>
-        v && typeof v === 'object' ? (v.display ?? v.text ?? v.label ?? JSON.stringify(v)) : v;
+        decode(
+          v && typeof v === 'object' ? (v.display ?? v.text ?? v.label ?? JSON.stringify(v)) : v,
+        );
       return rows.map((r) => {
         const out: Record<string, unknown> = {
           instanceId: String(r['instanceId'] ?? '')
             .replace(/[{}]/g, '')
             .toLowerCase(),
-          name: r['instanceName'] ?? flat(r['process']),
+          name: decode(r['instanceName']) ?? flat(r['process']),
         };
         for (const [k, v] of Object.entries(r)) {
           if (['instanceId', 'instanceName', 'process', 'isMailMergeDisabled'].includes(k))
@@ -260,6 +344,13 @@ export async function listProcessInstances(
         return out as { instanceId: string; name: string };
       });
     });
+    if (original !== null) {
+      // Put the user's filter back so their own view of the page is unchanged.
+      await submitInstanceFilter(
+        page,
+        original.replace(/&quot;/g, '"').replace(/&amp;/g, '&'),
+      ).catch(() => {});
+    }
     if (options.process) {
       const p = options.process.toLowerCase();
       instances = instances.filter((i) => {
@@ -272,7 +363,7 @@ export async function listProcessInstances(
       const q = options.search.toLowerCase();
       instances = instances.filter((i) => JSON.stringify(i).toLowerCase().includes(q));
     }
-    return { project, instances };
+    return { project, status, instances };
   });
 }
 
@@ -626,21 +717,27 @@ export async function startProcessInstance(
         );
         instance = await page.evaluate(
           (prefix: string, subject: string | null) => {
+            const txt = document.createElement('textarea');
+            const decode = (v: unknown) => {
+              if (typeof v !== 'string' || !v.includes('&')) return v as string;
+              txt.innerHTML = v;
+              return txt.value;
+            };
             const rows: any[] = (document.querySelector<any>('modus-table')?.data ?? []).filter(
-              (r: any) => String(r.instanceName ?? '').startsWith(`${prefix} - `),
+              (r: any) => String(decode(r.instanceName) ?? '').startsWith(`${prefix} - `),
             );
             const matching = subject
-              ? rows.filter((r) => (r.subject?.display ?? r.subject) === subject)
+              ? rows.filter((r) => decode(r.subject?.display ?? r.subject) === subject)
               : rows;
             const counter = (r: any) => Number(String(r.instanceName).split(' - ').pop()) || 0;
             const best = matching.sort((a, b) => counter(b) - counter(a))[0];
             return best
               ? {
                   instanceId: String(best.instanceId).replace(/[{}]/g, '').toLowerCase(),
-                  name: best.instanceName,
-                  subject: best.subject?.display,
-                  step: best.step,
-                  status: best.status,
+                  name: decode(best.instanceName),
+                  subject: decode(best.subject?.display),
+                  step: decode(best.step),
+                  status: decode(best.status),
                 }
               : undefined;
           },

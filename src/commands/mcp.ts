@@ -4,7 +4,6 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import * as eb from '../lib/eb-puppetmaster/index.js';
 import * as db from '../lib/db.js';
-import { refreshSessionIfNeeded } from '../lib/login-helper.js';
 import { STANDARD_PATHS } from './agent/guide.js';
 import * as pi from '../lib/eb-puppetmaster/process-instance.js';
 
@@ -334,7 +333,7 @@ export default class McpCommand extends Command {
         }
 
         const env = eb.getEnvironment(session.environment);
-        const cookies = await getMcpSessionCookies(session);
+        const cookies = getMcpStoredCookies(session);
 
         try {
           const schema = await fetchProcessSchema({
@@ -378,7 +377,7 @@ export default class McpCommand extends Command {
           : undefined;
         if (!items) {
           const env = eb.getEnvironment(session.environment);
-          const cookies = await getMcpSessionCookies(session);
+          const cookies = getMcpStoredCookies(session);
           try {
             items = await fetchReportCatalog({
               env,
@@ -422,7 +421,7 @@ export default class McpCommand extends Command {
       async ({ reportId, limit, sessionId, username }) => {
         const session = resolveMcpSession(sessionId, username);
         const env = eb.getEnvironment(session.environment);
-        const cookies = await getMcpSessionCookies(session);
+        const cookies = getMcpStoredCookies(session);
         const { runReport } = await import('../lib/eb-puppetmaster/report.js');
 
         try {
@@ -453,7 +452,7 @@ export default class McpCommand extends Command {
       async ({ reportId, sessionId, username }) => {
         const session = resolveMcpSession(sessionId, username);
         const env = eb.getEnvironment(session.environment);
-        const cookies = await getMcpSessionCookies(session);
+        const cookies = getMcpStoredCookies(session);
         const { exportReportConfig } = await import('../lib/eb-puppetmaster/report.js');
 
         try {
@@ -489,8 +488,8 @@ export default class McpCommand extends Command {
 
         const fromEnv = eb.getEnvironment(fromSession.environment);
         const toEnv = eb.getEnvironment(toSession.environment);
-        const fromCookies = await getMcpSessionCookies(fromSession);
-        const toCookies = await getMcpSessionCookies(toSession);
+        const fromCookies = getMcpStoredCookies(fromSession);
+        const toCookies = getMcpStoredCookies(toSession);
 
         const { exportReportConfig, createReportFromConfig } =
           await import('../lib/eb-puppetmaster/report.js');
@@ -589,12 +588,17 @@ export default class McpCommand extends Command {
 
     server.tool(
       'eb_process_instances',
-      "List a project's open process instances (name, subject, step, status, dates).",
+      "List a project's process instances (open by default; status: closed | draft | all) with name, subject, step, status, dates.",
       {
         ...sessionSchema,
         project: z.string().describe('Project name or PortalID'),
         process: z.string().optional().describe('Filter by process prefix or type'),
         search: z.string().optional().describe('Text filter'),
+        status: z
+          .enum(['open', 'closed', 'draft', 'all'])
+          .optional()
+          .default('open')
+          .describe('Which instances to list'),
       },
       async (a) =>
         runProcessTool(a, (c) =>
@@ -603,6 +607,7 @@ export default class McpCommand extends Command {
             project: a.project,
             process: a.process,
             search: a.search,
+            status: a.status,
           }),
         ),
     );
@@ -811,14 +816,4 @@ function resolveMcpSession(sessionId?: number, username?: string, account?: stri
 /** Stored cookies without a pre-flight check; executeInSession verifies auth on navigation. */
 function getMcpStoredCookies(session: db.SessionRow): any[] {
   return JSON.parse(session.session_cookies || '[]');
-}
-
-async function getMcpSessionCookies(session: db.SessionRow): Promise<any[]> {
-  const check = await refreshSessionIfNeeded(session.id, true);
-  if (!check.isLoggedIn) {
-    const origin = `https://${eb.getEnvironment(session.environment)}.${eb.baseurl}`;
-    throw eb.sessionCheckErrorFor(check, origin);
-  }
-  const updated = db.getSessionById(session.id) as db.SessionRow;
-  return JSON.parse(updated.session_cookies);
 }

@@ -1,7 +1,6 @@
 import { Command, Flags } from '@oclif/core';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import * as db from '../../lib/db.js';
-import { refreshSessionIfNeeded } from '../../lib/login-helper.js';
 import { exportReportConfig, createReportFromConfig } from '../../lib/eb-puppetmaster/report.js';
 
 export default class ReportsCopy extends Command {
@@ -50,32 +49,10 @@ export default class ReportsCopy extends Command {
       this.error(`Target session with ID ${flags['to-session']} not found.`);
     }
 
-    const headless = !flags['show-browser'];
-
-    // Refresh cookies for source and target
-    const fromSessionCheck = await refreshSessionIfNeeded(fromSession.id, headless);
-    if (!fromSessionCheck.isLoggedIn) {
-      const err = eb.sessionCheckErrorFor(
-        fromSessionCheck,
-        `https://${eb.getEnvironment(fromSession.environment)}.${eb.baseurl}`,
-      );
-      this.error(`Source session ${fromSession.id}: ${err.message}`, { code: err.code });
-    }
-    const fromCookies = JSON.parse(
-      (db.getSessionById(fromSession.id) as db.SessionRow).session_cookies,
-    );
-
-    const toSessionCheck = await refreshSessionIfNeeded(toSession.id, headless);
-    if (!toSessionCheck.isLoggedIn) {
-      const err = eb.sessionCheckErrorFor(
-        toSessionCheck,
-        `https://${eb.getEnvironment(toSession.environment)}.${eb.baseurl}`,
-      );
-      this.error(`Target session ${toSession.id}: ${err.message}`, { code: err.code });
-    }
-    const toCookies = JSON.parse(
-      (db.getSessionById(toSession.id) as db.SessionRow).session_cookies,
-    );
+    // Stored cookies: exportReportConfig / createReportFromConfig detect a login redirect on
+    // their own navigation (SessionExpiredError), so no separate pre-flight page load is needed.
+    const fromCookies = JSON.parse(fromSession.session_cookies || '[]');
+    const toCookies = JSON.parse(toSession.session_cookies || '[]');
 
     const fromEnv = eb.getEnvironment(fromSession.environment);
     const toEnv = eb.getEnvironment(toSession.environment);

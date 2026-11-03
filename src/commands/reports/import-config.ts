@@ -57,14 +57,14 @@ export default class ReportsImportConfig extends BaseSessionCommand {
     const session = await this.getSession(flags);
     const env = eb.getEnvironment(session.environment);
     const headless = !flags['show-browser'];
-    const cookies = await this.getSessionCookies(session.id, headless);
-
     try {
-      const result = await createReportFromConfig({
-        env,
-        cookies,
-        config,
-      });
+      const result = await this.withSessionCookies(session.id, headless, (cookies) =>
+        createReportFromConfig({
+          env,
+          cookies,
+          config,
+        }),
+      );
 
       const payload = {
         success: result.success,

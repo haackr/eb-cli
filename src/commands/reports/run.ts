@@ -47,15 +47,15 @@ export default class ReportsRun extends BaseSessionCommand {
     const session = await this.getSession(flags);
     const env = eb.getEnvironment(session.environment);
     const headless = !flags['show-browser'];
-    const cookies = await this.getSessionCookies(session.id, headless);
-
     try {
-      const result = await runReport({
-        env,
-        cookies,
-        reportId: args.report,
-        limit: flags.limit,
-      });
+      const result = await this.withSessionCookies(session.id, headless, (cookies) =>
+        runReport({
+          env,
+          cookies,
+          reportId: args.report,
+          limit: flags.limit,
+        }),
+      );
 
       if (flags['output-file']) {
         const outPath = path.resolve(flags['output-file']);

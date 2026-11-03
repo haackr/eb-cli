@@ -10,6 +10,7 @@ const FORM_PAGE = `<!DOCTYPE html><html><head><title>WebForm</title></head><body
   <input type="hidden" name="__VIEWSTATE" value="vs123" />
   <input type="hidden" name="__EVENTVALIDATION" value="ev456" />
   <input type="text" name="ctl00$Main$txtName" value="Alice" />
+  <input type="text" name="ctl00$Main$txtFieldName" encode="1" value="Cost & Schedule 100%" />
   <input type="checkbox" name="ctl00$Main$chkActive" />
   <select name="ctl00$Main$ddlStatus"><option value="1">Open</option><option value="2" selected>Closed</option></select>
   <input type="submit" name="ctl00$Main$btnSave" value="Save" />
@@ -146,6 +147,19 @@ describe('In-browser eb WebForms / workflow / report helpers', () => {
     assert.strictEqual(p.get('ctl00$Main$chkActive'), null);
     assert.strictEqual(p.get('ctl00$Main$btnSave'), null);
     assert.strictEqual(p.get('__EVENTTARGET'), 'ctl00$Main$lnkGo');
+  });
+
+  it('URL-encodes encode="1" inputs the way e-Builder\'s submit handler does', async () => {
+    const { result } = await run(
+      `(arg, eb) => [eb.buildFormParams(null).toString(), eb.buildFormParams(null, { txtFieldName: 'A/B ?' }).toString()]`,
+    );
+    const [plain, overridden] = (result as string[]).map((q) => new URLSearchParams(q));
+    assert.strictEqual(
+      plain!.get('ctl00$Main$txtFieldName'),
+      encodeURIComponent('Cost & Schedule 100%'),
+    );
+    assert.strictEqual(plain!.get('ctl00$Main$txtName'), 'Alice', 'unmarked inputs are untouched');
+    assert.strictEqual(overridden!.get('ctl00$Main$txtFieldName'), encodeURIComponent('A/B ?'));
   });
 
   it('postWebForm posts to the form action and returns parsed HTML', async () => {

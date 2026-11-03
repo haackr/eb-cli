@@ -16,7 +16,7 @@ const I = 'ctl00_contentSection_';
 interface FieldDef {
   id: string;
   label: string;
-  type: 'text' | 'textarea' | 'radio';
+  type: 'text' | 'textarea' | 'radio' | 'lookup';
   options?: string[];
   required?: boolean;
   /** Steps where the field is editable. */
@@ -76,6 +76,7 @@ export const PROCESSES: ProcessDef[] = [
         options: ['Yes', 'No'],
         editable: ['Start', 'Review'],
       },
+      { id: F(5), label: 'Related RFI', type: 'lookup', editable: [] },
     ],
     steps: {
       Start: {
@@ -128,8 +129,25 @@ const hidden = (suffix: string, text: string) =>
 const submit = (suffix: string, value: string, onclick = '') =>
   `<input type="submit" name="${P}${suffix}" id="${I}${suffix}" value="${esc(value)}"${onclick ? ` onclick="${esc(onclick)}"` : ''}/>`;
 
+export const DEFAULT_FILTER = {
+  InMyCourt: false,
+  Draft: false,
+  Completed: false,
+  InProgress: true,
+  InitiatedByMe: false,
+  Process: '',
+  Prefix: null,
+  Status: '',
+  Step: '',
+  Text: '',
+  FilterBy: '',
+};
+
 export class MockProcessPages {
   instances: MockInstance[] = [];
+  /** Project Processes state filter; remembered between requests like e-Builder's. */
+  filter: Record<string, unknown> = { ...DEFAULT_FILTER };
+  filterPosts = 0;
   private counters: Record<string, number> = {};
 
   /** Returns true when the request was handled. */
@@ -182,24 +200,43 @@ export class MockProcessPages {
           workflowId: `{${p.processId}}`,
           description: null,
         }));
+        if (req.method === 'POST' && /btnFilter$/.test(b.get('__EVENTTARGET') ?? '')) {
+          const raw = (
+            b.get('ctl00$ctl00$ContentPlaceHolder1$contentSection$chipSelection') ?? ''
+          ).replace(/&quot;/g, '"');
+          this.filter = { ...this.filter, ...JSON.parse(raw) };
+          this.filterPosts++;
+        }
+        const f = this.filter;
         const rows = this.instances
-          .filter((i) => i.projectId === projectId && !i.draft && i.step !== 'Finish')
+          .filter((i) => i.projectId === projectId)
+          .filter(
+            (i) =>
+              (f['InProgress'] && !i.draft && i.step !== 'Finish') ||
+              (f['Completed'] && !i.draft && i.step === 'Finish') ||
+              (f['Draft'] && i.draft),
+          )
+          // e-Builder HTML-encodes the strings inside modus-table data.
           .map((i) => ({
             instanceId: `{${i.id}}`,
-            instanceName: `${i.process.prefix} - ${i.counter}`,
+            instanceName: esc(`${i.process.prefix} - ${i.counter}`),
             process: {
-              display: `${i.process.prefix} - ${i.counter}`,
+              display: esc(`${i.process.prefix} - ${i.counter}`),
               url: `javascript:hrefProcessView('{${i.id}}')`,
             },
-            open: { text: 'Open' },
-            subject: { display: i.subject },
-            step: i.step,
-            status: i.status,
+            open: { text: i.draft ? 'Draft' : i.step === 'Finish' ? 'Closed' : 'Open' },
+            subject: { display: esc(i.subject) },
+            step: esc(i.step),
+            status: esc(i.status),
           }));
+        // The real page stores the filter JSON entity-encoded inside the attribute value.
+        const chip = esc(JSON.stringify(f).replace(/"/g, '&quot;'));
         send(
           page(
             'Project Processes',
-            `<modus-table id="t"></modus-table><script>
+            `<input type="hidden" name="ctl00$ctl00$ContentPlaceHolder1$contentSection$chipSelection" id="ctl00_ctl00_ContentPlaceHolder1_contentSection_chipSelection" value="${chip}"/>
+            <input type="submit" name="ctl00$ctl00$ContentPlaceHolder1$contentSection$btnFilter" id="ctl00_ctl00_ContentPlaceHolder1_contentSection_btnFilter" style="display:none"/>
+            <modus-table id="t"></modus-table><script>
             function getSelectProcessModalProcessOptions(){ return ${JSON.stringify(options)}; }
             document.getElementById('t').data = ${JSON.stringify(rows)};
             </script>`,
@@ -403,7 +440,11 @@ export class MockProcessPages {
         const editable = step === null || f.editable.includes(step);
         const v = values[f.id] ?? '';
         let control: string;
-        if (!editable) control = `<span id="{${f.id}}">${esc(v)}</span>`;
+        if (f.type === 'lookup')
+          control = `<span id="${I}lbl{${f.id}}">${esc(v)}</span><input type="hidden" name="${P}{${f.id}}" id="${I}{${f.id}}"/><span>&nbsp;</span><a onclick="javascript:void(0)">[Lookup]</a> <a onclick="javascript:void(0)">[Remove]</a>`;
+        // Real InstanceDetails markup: help-text <div> + value span with a prefixed id and name.
+        else if (!editable)
+          control = `<div>Help: describe the ${esc(f.label)}</div><span id="${I}{${f.id}}" name="{${f.id}}">${v ? esc(v) : '&nbsp;'}</span>`;
         else if (f.type === 'textarea') control = `<textarea name="{${f.id}}">${esc(v)}</textarea>`;
         else if (f.type === 'radio')
           control = `<table class="RadioButtonList">${f
@@ -415,7 +456,9 @@ export class MockProcessPages {
         else control = `<input type="text" name="{${f.id}}" value="${esc(v)}"/>`;
         return `<tr><td class="Label">${f.required ? '*' : ''}${esc(f.label)}:</td><td>${control}</td></tr>`;
       })
-      .join('')}</table>`;
+      .join(
+        '',
+      )}<tr><td colspan="2"><div id="${I}DynamicLineItemsControl_pnlCommitment"><table><tr><td class="Label">Commitment Type:</td><td><input type="text" name="${P}DynamicLineItemsControl$txtType" value=""/></td></tr><tr><td class="Label">Vendor:</td><td>Acme</td></tr></table></div></td></tr></table>`;
   }
 
   private renderStart(proc: ProcessDef, draft: MockInstance | undefined, flash: string) {

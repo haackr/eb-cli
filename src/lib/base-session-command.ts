@@ -219,31 +219,51 @@ export abstract class BaseSessionCommand extends Command {
   }
 
   /**
-   * If the session has an autonomous credential reference (1Password, Bitwarden, etc.),
+   * If the session has an autonomous credential reference (1Password, Bitwarden, env),
    * performs a fresh login, persists the new cookies, and returns them. Returns null otherwise.
+   *
+   * Safety rules (a re-login consumes a TOTP code and must never surprise the user):
+   * - always headless, with the provider's live TOTP; never falls back to a visible browser;
+   * - one re-login at a time across all eb processes (lock file); a process that waited
+   *   reuses the cookies the other one just saved instead of logging in again;
+   * - disabled entirely with EB_AUTO_RELOGIN=0.
    */
   protected async reloginWithCredentialProvider(
     sessionId: number,
-    headless: boolean = true,
+    _headless: boolean = true,
   ): Promise<any[] | null> {
+    if (/^(0|false|off|no)$/i.test(process.env['EB_AUTO_RELOGIN'] ?? '')) return null;
     const credRef = db.getCredentialRef(sessionId);
     if (!credRef) return null;
-    const session = db.getSessionById(sessionId) as SessionRow | undefined;
-    if (!session) return null;
+    const before = db.getSessionById(sessionId) as SessionRow | undefined;
+    if (!before) return null;
+
+    const { acquireReloginLock } = await import('./relogin-lock.js');
+    let release: (() => void) | undefined;
     try {
+      release = await acquireReloginLock();
+      // Another process may have re-logged in while we waited: reuse its cookies.
+      const current = db.getSessionById(sessionId) as SessionRow | undefined;
+      if (current && current.session_cookies !== before.session_cookies) {
+        return JSON.parse(current.session_cookies);
+      }
+
       const { CredentialResolver } = await import('./credentials/resolver.js');
-      const creds = await CredentialResolver.resolve({
+      const ref = {
         provider: credRef.provider as any,
         itemRef: credRef.item_ref,
         vault: credRef.vault ?? undefined,
-      });
-      const env = eb.getEnvironment(session.environment);
+      };
+      const creds = await CredentialResolver.resolve(ref);
+      if (!creds.password) return null;
+      const env = eb.getEnvironment(before.environment);
       const newCookies = await this.performLogin(
         env,
-        headless,
-        creds.username || session.username,
+        true,
+        creds.username || before.username,
         creds.password,
-        creds.account || session.account,
+        creds.account || before.account,
+        () => CredentialResolver.getLiveTotp(ref),
       );
       if (newCookies && newCookies.length > 0) {
         db.updateSessionCookies(sessionId, JSON.stringify(newCookies));
@@ -251,6 +271,12 @@ export abstract class BaseSessionCommand extends Command {
       }
     } catch {
       // Fall through: caller reports the original failure
+    } finally {
+      release?.();
+      // Never leave a login browser behind.
+      await eb.BrowserManager.getInstance()
+        .closeBrowser()
+        .catch(() => {});
     }
     return null;
   }
@@ -300,7 +326,18 @@ export abstract class BaseSessionCommand extends Command {
     username?: string,
     password?: string,
     account?: string,
+    getTotp?: () => Promise<string | undefined>,
   ): Promise<any[]> {
-    return await eb.login(env, headless, username, password, account);
+    return await eb.login(
+      env,
+      headless,
+      username,
+      password,
+      account,
+      undefined,
+      undefined,
+      undefined,
+      getTotp,
+    );
   }
 }

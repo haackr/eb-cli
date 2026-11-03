@@ -36,14 +36,14 @@ export default class ReportsExportConfig extends BaseSessionCommand {
     const session = await this.getSession(flags);
     const env = eb.getEnvironment(session.environment);
     const headless = !flags['show-browser'];
-    const cookies = await this.getSessionCookies(session.id, headless);
-
     try {
-      const config = await exportReportConfig({
-        env,
-        cookies,
-        reportId: args.report,
-      });
+      const config = await this.withSessionCookies(session.id, headless, (cookies) =>
+        exportReportConfig({
+          env,
+          cookies,
+          reportId: args.report,
+        }),
+      );
 
       if (flags['output-file']) {
         const outPath = path.resolve(flags['output-file']);

@@ -5,7 +5,8 @@ import { listProcessInstances } from '../../lib/eb-puppetmaster/process-instance
 import { requiredProjectFlag } from '../../lib/process-command-utils.js';
 
 export default class ProcessInstances extends BaseSessionCommand {
-  static override summary = "List a project's open process instances";
+  static override summary =
+    "List a project's process instances (open by default; --status closed|draft|all)";
   static override description =
     "Lists the instances on the project's Processes page (its default view: open instances) with step, status, and dates.";
   static override examples = [
@@ -20,6 +21,11 @@ export default class ProcessInstances extends BaseSessionCommand {
       description: 'Filter by process prefix (e.g. "MPA") or process type name',
     }),
     search: Flags.string({ description: 'Case-insensitive text filter over all columns' }),
+    status: Flags.string({
+      description: 'Which instances to list',
+      options: ['open', 'closed', 'draft', 'all'],
+      default: 'open',
+    }),
   };
 
   public async run(): Promise<unknown> {
@@ -34,10 +40,11 @@ export default class ProcessInstances extends BaseSessionCommand {
           project: flags.project,
           process: flags.process,
           search: flags.search,
+          status: flags.status as 'open' | 'closed' | 'draft' | 'all',
         }),
       );
       if (!this.jsonEnabled()) {
-        this.log(`${result.project.name}: ${result.instances.length} open instance(s)`);
+        this.log(`${result.project.name}: ${result.instances.length} ${result.status} instance(s)`);
         for (const i of result.instances) {
           this.log(
             `  ${i.name.padEnd(12)} ${String(i.step ?? '').padEnd(28)} ${String(i.status ?? '').padEnd(12)} ${i.subject ?? ''}  [${i.instanceId}]`,

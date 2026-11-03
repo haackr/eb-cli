@@ -695,6 +695,12 @@ const inBrowserEbHelper = `
        * browser would, for fast fetch() postbacks. Overrides match full or short control names;
        * a null override removes the field.
        */
+      // e-Builder setup pages mark some inputs encode="1"; their submit handler runs
+      // encodeURIComponent on those values before posting, so a fetch() post must too.
+      _encodeIfMarked: function(el, value) {
+        var marked = el && el.getAttribute && el.getAttribute('encode') === '1';
+        return marked ? encodeURIComponent(value) : value;
+      },
       buildFormParams: function(docOrForm, overrides, eventTarget, eventArg) {
         var form = this._resolveForm(docOrForm);
         var params = new URLSearchParams();
@@ -711,7 +717,7 @@ const inBrowserEbHelper = `
             }
             continue;
           }
-          params.append(el.name, el.value);
+          params.append(el.name, this._encodeIfMarked(el, el.value));
         }
         if (eventTarget !== undefined && eventTarget !== null) {
           params.set('__EVENTTARGET', eventTarget);
@@ -722,7 +728,7 @@ const inBrowserEbHelper = `
           if (!Object.prototype.hasOwnProperty.call(o2, key)) continue;
           var name = this._fieldName(form, key);
           if (o2[key] === null) params.delete(name);
-          else params.set(name, String(o2[key]));
+          else params.set(name, this._encodeIfMarked(form.elements.namedItem(name), String(o2[key])));
         }
         return params;
       },

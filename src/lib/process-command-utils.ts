@@ -43,7 +43,7 @@ export function parseFieldInputs(
   return out;
 }
 
-/** Resolves an instance given as a GUID, or as its name ("MPA - 2") within --project. */
+/** Resolves an instance given as a GUID, or as its name ("MPA - 2", open or closed) within --project. */
 export async function resolveInstanceId(
   base: { env: eb.Environment; cookies: any[] },
   instance: string,
@@ -60,13 +60,13 @@ export async function resolveInstanceId(
       .replace(/\s*-\s*/g, ' - ')
       .trim()
       .toLowerCase();
-  const { instances } = await listProcessInstances({ ...base, project });
-  const hit = instances.find((i) => norm(i.name) === norm(instance));
-  if (!hit) {
-    throw new Error(
-      `No open instance named "${instance}" in project "${project}" (closed instances need their ID)`,
+  const find = async (status: 'open' | 'all') =>
+    (await listProcessInstances({ ...base, project, status })).instances.find(
+      (i) => norm(i.name) === norm(instance),
     );
-  }
+  // Open instances first (one page load); closed/draft ones need the state filter.
+  const hit = (await find('open')) ?? (await find('all'));
+  if (!hit) throw new Error(`No instance named "${instance}" in project "${project}"`);
   return hit.instanceId;
 }
 

@@ -12,7 +12,7 @@ import {
   submitProcessDraft,
   takeProcessAction,
 } from '../../lib/eb-puppetmaster/process-instance.js';
-import { parseFieldInputs } from '../../lib/process-command-utils.js';
+import { parseFieldInputs, resolveInstanceId } from '../../lib/process-command-utils.js';
 import { MockEBuilder } from './mock-ebuilder.js';
 
 describe('Process instances against a mock e-Builder (process-instance.ts)', () => {
@@ -110,6 +110,11 @@ describe('Process instances against a mock e-Builder (process-instance.ts)', () 
       [radio.type, radio.value, radio.options],
       ['radio', 'Yes', ['Yes', 'No']],
     );
+    // Item 1: lookup fields read their own (empty) span, not "[Lookup] [Remove]".
+    const lookup = view.fields.find((f) => f.label === 'Related RFI')!;
+    assert.deepStrictEqual([lookup.type, lookup.value, lookup.editable], ['readonly', null, false]);
+    // Item 2: labels from the embedded commitment sub-control are not process fields.
+    assert.ok(!view.fields.some((f) => ['Commitment Type', 'Vendor'].includes(f.label)));
   });
 
   it('refuses to set fields while ownership is pending, then accepts it on request', async () => {
@@ -219,6 +224,54 @@ describe('Process instances against a mock e-Builder (process-instance.ts)', () 
     assert.strictEqual(submitted.instance.currentStep, 'Review');
     const inst = mock.processPages.instances.find((i) => i.id === id)!;
     assert.deepStrictEqual(Object.values(inst.values).sort(), ['Golden', 'Yes', 'draft note']);
+  });
+
+  it('lists closed, draft, and all instances, restoring the page filter afterwards', async () => {
+    const draft = await startProcessInstance({
+      ...base(),
+      project,
+      process: 'WD',
+      subject: 'RH filter draft',
+      draft: true,
+    });
+    const names = async (status: 'open' | 'closed' | 'draft' | 'all') =>
+      (await listProcessInstances({ ...base(), project, status })).instances.map((i) => [
+        i.name,
+        i.state,
+      ]);
+    const open = await names('open');
+    assert.ok(open.every(([, state]) => state === 'Open'));
+    assert.deepStrictEqual(await names('closed'), [['WD - 1', 'Closed']]);
+    assert.ok((await names('draft')).some(([, state]) => state === 'Draft'));
+    const all = await names('all');
+    assert.strictEqual(all.length, open.length + 2);
+    assert.deepStrictEqual(mock.processPages.filter['InProgress'], true, 'filter restored');
+    assert.deepStrictEqual(mock.processPages.filter['Completed'], false, 'filter restored');
+    assert.ok(draft.instance);
+  });
+
+  it('resolves closed instances by name', async () => {
+    const id = await resolveInstanceId(
+      { env: Environment.US2, cookies: [], origin: mock.origin, browser } as any,
+      'wd - 1',
+      project,
+    );
+    assert.strictEqual(id, wd);
+  });
+
+  it('decodes HTML entities in instance data and still finds new instances by subject', async () => {
+    const started = await startProcessInstance({
+      ...base(),
+      project,
+      process: 'WD',
+      subject: 'RH P&L <review>',
+    });
+    assert.strictEqual(started.instance?.subject, 'RH P&L <review>');
+    const { instances } = await listProcessInstances({ ...base(), project, search: 'P&L' });
+    assert.deepStrictEqual(
+      instances.map((i) => i.subject),
+      ['RH P&L <review>'],
+    );
   });
 
   it('parses --field and --fields inputs', () => {

@@ -220,4 +220,71 @@ describe('BaseSessionCommand (src/lib/base-session-command.ts)', () => {
       assert.deepStrictEqual(cookies, [{ name: 'a', value: 'b' }]);
     });
   });
+
+  describe('reloginWithCredentialProvider (automatic re-login safety)', () => {
+    class ReloginCommand extends ConcreteTestSessionCommand {
+      public calls: Array<{ headless: boolean; hasTotp: boolean }> = [];
+      protected override async performLogin(
+        _env: eb.Environment,
+        headless: boolean,
+        _u?: string,
+        _p?: string,
+        _a?: string,
+        getTotp?: () => Promise<string | undefined>,
+      ): Promise<any[]> {
+        this.calls.push({ headless, hasTotp: typeof getTotp === 'function' });
+        await new Promise((r) => setTimeout(r, 300));
+        return [{ name: 'fresh', value: String(this.calls.length) }];
+      }
+      public relogin(id: number, headless: boolean) {
+        return this.reloginWithCredentialProvider(id, headless);
+      }
+    }
+    const saved = { ...process.env };
+    const makeCmd = () => new ReloginCommand([], {} as any);
+
+    beforeEach(() => {
+      process.env['EB_RELOGIN_LOCK_FILE'] = path.join(tmpDir, 'relogin.lock');
+      process.env['EB_USERNAME'] = 'user@example.com';
+      process.env['EB_PASSWORD'] = 'pw';
+      delete process.env['EB_AUTO_RELOGIN'];
+      db.addSession(
+        'user@example.com',
+        'us2',
+        'Acct',
+        JSON.stringify([{ name: 'old', value: '0' }]),
+      );
+      db.setCredentialRef(1, 'env', 'e-Builder');
+    });
+    after(() => {
+      process.env = saved;
+    });
+
+    it('is always headless and passes the provider TOTP (never a visible browser)', async () => {
+      const c = makeCmd();
+      const cookies = await c.relogin(1, false);
+      assert.deepStrictEqual(cookies, [{ name: 'fresh', value: '1' }]);
+      assert.deepStrictEqual(c.calls, [{ headless: true, hasTotp: true }]);
+      assert.deepStrictEqual(JSON.parse(db.getSessionById(1)!.session_cookies), cookies);
+    });
+
+    it('logs in once when several re-logins race; the others reuse the saved cookies', async () => {
+      const a = makeCmd();
+      const b = makeCmd();
+      const [ra, rb] = await Promise.all([a.relogin(1, true), b.relogin(1, true)]);
+      assert.strictEqual(a.calls.length + b.calls.length, 1);
+      assert.deepStrictEqual(ra, rb);
+      assert.ok(!fs.existsSync(path.join(tmpDir, 'relogin.lock')), 'lock released');
+    });
+
+    it('is disabled by EB_AUTO_RELOGIN=0 and without a credential reference', async () => {
+      process.env['EB_AUTO_RELOGIN'] = '0';
+      const c = makeCmd();
+      assert.strictEqual(await c.relogin(1, true), null);
+      delete process.env['EB_AUTO_RELOGIN'];
+      db.addSession('other@example.com', 'us2', 'Acct', '[]');
+      assert.strictEqual(await c.relogin(2, true), null);
+      assert.deepStrictEqual(c.calls, []);
+    });
+  });
 });

@@ -244,10 +244,25 @@ describe('Report wizard driver against a mock e-Builder (report.ts / report-wiza
       });
     });
 
+    it('matches processes by prefix and variable name', async () => {
+      const byPrefix = await fetchProcessSchema({
+        ...base(),
+        processName: 'rfir',
+        useCache: false,
+      });
+      assert.strictEqual(byPrefix.name, 'RFI Response');
+      const byVariable = await fetchProcessSchema({
+        ...base(),
+        processName: 'Process_RFI',
+        useCache: false,
+      });
+      assert.strictEqual(byVariable.name, 'RFI');
+    });
+
     it('reports ambiguous and unknown process names', async () => {
       await assert.rejects(
         fetchProcessSchema({ ...base(), processName: 'RF', useCache: false }),
-        /ambiguous: RFI, RFI Response/,
+        /ambiguous: RFI \(RFI\), RFI Response \(RFIR\)/,
       );
       await assert.rejects(
         fetchProcessSchema({ ...base(), processName: 'Submittal', useCache: false }),

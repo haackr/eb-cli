@@ -19,6 +19,10 @@ import {
 } from './report-wizard.js';
 import { gotoAuthenticated, withSessionPage, type SessionPageOptions } from './session-page.js';
 import * as db from '../db.js';
+import { envMap } from './index.js';
+
+/** Cache key for an environment: accepts the short name ("us2") or the subdomain ("app-us2"). */
+const envKey = (env: string) => envMap[env] ?? env;
 
 export interface ReportSummaryItem {
   id: string;
@@ -85,7 +89,7 @@ export function getCachedReportCatalog(
   env: string,
   account: string,
 ): ReportSummaryItem[] | undefined {
-  const json = db.getCachedSchema(env, account, 'report_catalog', 'all');
+  const json = db.getCachedSchema(envKey(env), account, 'report_catalog', 'all');
   if (!json) return undefined;
   try {
     return JSON.parse(json) as ReportSummaryItem[];
@@ -99,7 +103,7 @@ export function saveCachedReportCatalog(
   account: string,
   reports: ReportSummaryItem[],
 ): void {
-  db.setCachedSchema(env, account, 'report_catalog', 'all', JSON.stringify(reports));
+  db.setCachedSchema(envKey(env), account, 'report_catalog', 'all', JSON.stringify(reports));
 }
 
 const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
