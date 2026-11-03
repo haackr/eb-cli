@@ -403,6 +403,29 @@ describe('Session Exec Operations (src/lib/eb-puppetmaster/exec.ts)', () => {
       assert.strictEqual(result.dialogs[0]?.handled, 'script');
     });
 
+    it('uses first-row <td> headers for e-Builder TableGrid tables', async () => {
+      const url = page(
+        'Grid',
+        '<table id="grdProcesses" class="TableGrid"><tr><td><a>Name</a></td><td><a>Prefix</a></td></tr><tr><td>Invoice</td><td>INV</td></tr></table>',
+      );
+      const result = await executeInSession({
+        env: Environment.US1,
+        cookies: [],
+        browser,
+        url,
+        inspect: true,
+        script: `(arg, eb) => eb.getTable('#grdProcesses')`,
+      });
+      assert.deepStrictEqual(result.result, {
+        headers: ['Name', 'Prefix'],
+        rowCount: 1,
+        rows: [{ Name: 'Invoice', Prefix: 'INV' }],
+      });
+      const grid = result.inspection?.tables.find((t) => t.id === 'grdProcesses');
+      assert.deepStrictEqual(grid?.headers, ['Name', 'Prefix']);
+      assert.strictEqual(grid?.rowCount, 1);
+    });
+
     it('ignores hidden about:blank iframes when locating the content document', async () => {
       const url = page(
         'Inner Page',

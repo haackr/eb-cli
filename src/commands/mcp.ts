@@ -552,7 +552,8 @@ export default class McpCommand extends Command {
               'Serializes ASP.NET form (__VIEWSTATE etc.) to URLSearchParams',
             'eb.postWebForm(url?, formOrSelector?, overrides?, eventTarget?, eventArg?)':
               'fetch() postback resolving { url, status, html }',
-            'eb.downloadWorkflowXml(workflowId)': 'Returns .ebw workflow XML',
+            'eb.downloadWorkflowXml(workflowId)':
+              'Returns .ebw workflow XML (handler not available in every environment)',
             'eb.exportReportCsv(reportId)': 'Returns full custom report CSV',
           },
           errorCodes: {

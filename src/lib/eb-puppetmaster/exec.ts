@@ -492,11 +492,22 @@ export async function inspectPage(page: puppeteer.Page): Promise<PageInspectionR
         if (hText) headers.push(hText);
       });
 
+      // e-Builder TableGrid headers are often <td> cells in the first row (sort links).
+      let headerRow: Element | null = null;
+      const isGrid =
+        /TableGrid|rgMasterTable/.test(tbl.className || '') || /grd|Grid/.test(tbl.id || '');
+      if (headers.length === 0 && isGrid) {
+        headerRow = (tbl as HTMLTableElement).rows?.[0] ?? null;
+        headerRow?.querySelectorAll('td').forEach((td, idx) => {
+          headers.push((td.textContent || '').replace(/\s+/g, ' ').trim() || `Column_${idx + 1}`);
+        });
+      }
+
       if (headers.length === 0) return;
 
       const rows: Record<string, string>[] = [];
       const trList = Array.from(tbl.querySelectorAll('tbody tr, tr.rgRow, tr.rgAltRow')).filter(
-        (tr) => !tr.querySelector('th'),
+        (tr) => !tr.querySelector('th') && tr !== headerRow,
       );
       const maxSample = Math.min(trList.length, 25);
 
@@ -625,12 +636,23 @@ const inBrowserEbHelper = `
         for (var i = 0; i < ths.length; i++) {
           headers.push((ths[i].textContent || '').replace(/\\s+/g, ' ').trim());
         }
+        var headerRow = null;
+        if (headers.length === 0 && tbl.rows && tbl.rows.length > 0) {
+          // e-Builder TableGrid headers are often <td> cells in the first row.
+          headerRow = tbl.rows[0];
+          var htds = headerRow.querySelectorAll('td');
+          for (var hi = 0; hi < htds.length; hi++) {
+            headers.push((htds[hi].textContent || '').replace(/\\s+/g, ' ').trim() || ('Column_' + (hi + 1)));
+          }
+        }
         var rows = [];
-        var trs = tbl.querySelectorAll('tbody tr, tr.rgRow, tr.rgAltRow');
+        var trs = Array.prototype.filter.call(
+          tbl.querySelectorAll('tbody tr, tr.rgRow, tr.rgAltRow'),
+          function(row) { return row !== headerRow && !row.querySelector('th'); }
+        );
         var limit = Math.min(trs.length, maxRows || 50);
         for (var r = 0; r < limit; r++) {
           var tr = trs[r];
-          if (tr.querySelector('th')) continue;
           var tds = tr.querySelectorAll('td');
           var rowObj = {};
           for (var c = 0; c < tds.length; c++) {

@@ -1,19 +1,21 @@
 import { Command, Flags } from '@oclif/core';
 
-/** e-Builder paths observed working in US3 production sessions. */
+/**
+ * e-Builder paths (relative; the CLI resolves the host from the session's environment).
+ * Verified against a live US1 session on 2026-11-02.
+ */
 export const STANDARD_PATHS = {
   home: '/da2/Home/index2.aspx',
   processesView: '/da2/Processes/ProcessesView.aspx',
   manageProcesses: '/da2/Setup/Admin/Processes/ManageProcesses.aspx',
   viewProcess: '/da2/Setup/Admin/Processes/ViewProcess.aspx?ProcessID={GUID}',
-  downloadWorkflow:
-    '/da2/Setup/Admin/Processes/Workflows/DownloadWorkflowHandler.ashx?WorkflowID={GUID}',
-  fieldDependenciesRpc:
-    'POST /da2/Controls/AjaxService.asmx/FieldDependenciesGetAllDependencies { processID }',
+  manageWorkflows: '/da2/Setup/Admin/Processes/ManageWorkflows.aspx?ProcessID={GUID}',
+  viewWorkflow: '/da2/Setup/Admin/Processes/ViewWorkflow.aspx?WorkflowID={GUID}&ProcessID={GUID}',
   importProcesses: '/da2/Processes/ImportProcesses/ImportProcesses.aspx',
   reportsList: '/da2/Reports/index.aspx',
   editReport: '/da2/Reports/AddEditReport.aspx?ReportID={GUID}',
   reportResults: '/da2/Reports/ReportResults.aspx?ReportID={GUID}',
+  biReport: '/da2/Reports/BusinessIntelligence/BIReports.aspx?ActionType=2&ReportID={GUID}',
   manageUsers: '/da2/Users/ManageUsers.aspx',
   apiLogs: '/da2/ApiLogs/ApiLogs.aspx',
 } as const;
