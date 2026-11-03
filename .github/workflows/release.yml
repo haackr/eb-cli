@@ -171,6 +171,8 @@ jobs:
     name: Build Native Installer (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      # One platform's installer failing must not cancel the others.
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -208,6 +210,12 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: powershell
         run: choco install nsis -y --version 3.08
+
+      # `oclif pack deb` builds an apt repo index with apt-ftparchive (from apt-utils),
+      # which current ubuntu-latest runner images no longer ship.
+      - name: Install apt-utils
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y apt-utils
 
       - name: Pack installer
         shell: bash
