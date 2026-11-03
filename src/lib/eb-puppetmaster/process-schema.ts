@@ -92,7 +92,10 @@ export async function fetchProcessSchema(options: {
   }
 
   const browserInstance =
-    browser || (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900']));
+    browser ||
+    (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900'], false, {
+      allowDaemon: true,
+    }));
   const context = await browserInstance.createBrowserContext();
   let page: puppeteer.Page | null = null;
 

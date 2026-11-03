@@ -87,7 +87,10 @@ export async function fetchReportCatalog(options: {
   }
 
   const browserInstance =
-    browser || (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900']));
+    browser ||
+    (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900'], false, {
+      allowDaemon: true,
+    }));
   const context = await browserInstance.createBrowserContext();
   let page: puppeteer.Page | null = null;
 
@@ -165,7 +168,10 @@ export async function exportReportConfig(options: {
   const { env, cookies, reportId, browser } = options;
 
   const browserInstance =
-    browser || (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900']));
+    browser ||
+    (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900'], false, {
+      allowDaemon: true,
+    }));
   const context = await browserInstance.createBrowserContext();
   let page: puppeteer.Page | null = null;
 
@@ -244,7 +250,10 @@ export async function createReportFromConfig(options: {
   const { env, cookies, config, browser } = options;
 
   const browserInstance =
-    browser || (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900']));
+    browser ||
+    (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900'], false, {
+      allowDaemon: true,
+    }));
   const context = await browserInstance.createBrowserContext();
   let page: puppeteer.Page | null = null;
 
@@ -306,7 +315,10 @@ export async function runReport(options: RunReportOptions): Promise<RunReportRes
   const { env, cookies, reportId, limit = 50, browser } = options;
 
   const browserInstance =
-    browser || (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900']));
+    browser ||
+    (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900'], false, {
+      allowDaemon: true,
+    }));
   const context = await browserInstance.createBrowserContext();
   let page: puppeteer.Page | null = null;
 

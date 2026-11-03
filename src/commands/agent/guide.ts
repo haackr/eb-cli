@@ -70,6 +70,10 @@ export default class AgentGuide extends Command {
             'Select a session by account name rather than numeric ID: --account prod, --account uat, or -A "Acme - Production" (case-insensitive substring). --session-id <n> and --username <u> also work. With none, the newest session is used non-interactively.',
           example: 'eb session exec --account uat ./script.js --json',
         },
+        browserDaemon: {
+          description:
+            'Before running many eb commands in a row, run "eb daemon start" to reuse one warm headless browser (each command still gets an isolated context; it exits after 15 idle minutes). "eb daemon stop" ends it.',
+        },
         dialogs: {
           description:
             'alert/confirm/prompt are dismissed by default and listed in the `dialogs` output. Use --dialog-policy accept to confirm (e.g. delete/void actions), or register page.on("dialog") in a Puppeteer script to handle them yourself.',
@@ -153,6 +157,8 @@ async ({ page, arg, eb, fs }) => {
 eb session exec --account prod --url /da2/Processes/ProcessesView.aspx --file script.js --json
 \`\`\`
 Puppeteer mode is auto-detected; \`--puppeteer\` / \`--no-puppeteer\` force it. Dialogs are dismissed by default (\`--dialog-policy accept|dismiss|manual\`).
+
+For loops of many commands, run \`eb daemon start\` first to reuse a warm headless browser.
 
 ## 2. In-Browser "eb" Helper Reference
 

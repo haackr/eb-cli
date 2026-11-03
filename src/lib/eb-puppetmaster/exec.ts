@@ -965,6 +965,8 @@ export async function executeInSession(
     (await BrowserManager.getInstance().getBrowser(
       headless,
       headless ? ['--window-size=1440,900'] : undefined,
+      false,
+      { allowDaemon: true },
     ));
 
   const context = await browserInstance.createBrowserContext();

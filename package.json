@@ -41,6 +41,9 @@
       "identifier": "com.avicado.eb-cli"
     },
     "topics": {
+      "daemon": {
+        "description": "Manage the optional warm headless browser shared by eb commands."
+      },
       "budgetitems": {
         "description": "Change or delete budget items."
       },

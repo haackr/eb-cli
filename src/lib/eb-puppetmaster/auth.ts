@@ -1116,9 +1116,12 @@ export async function isLoggedIn(
   browser?: puppeteer.Browser,
 ): Promise<SessionCheckResult> {
   if (!browser) {
-    browser = await BrowserManager.getInstance().getBrowser(headless, [
-      `--app=http://${env}.${baseurl}`,
-    ]);
+    browser = await BrowserManager.getInstance().getBrowser(
+      headless,
+      [`--app=http://${env}.${baseurl}`],
+      false,
+      { allowDaemon: true },
+    );
   }
 
   // Create a new browser context for isolation
