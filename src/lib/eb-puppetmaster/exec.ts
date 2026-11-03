@@ -1,6 +1,15 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';
+import {
+  classifyNavigationError,
+  detectLoginPage,
+  safePageUrl,
+  SessionCheckError,
+  sessionCheckErrorFor,
+  type SessionCheckReason,
+} from './session-check.js';
 
 export type ExecuteInSessionMode = 'dom' | 'puppeteer';
 
@@ -46,6 +55,10 @@ export class ExecuteInSessionError extends Error {
   public title?: string | undefined;
   public frameUrl?: string | null | undefined;
   public screenshotPath?: string | null | undefined;
+  /** Machine-readable error code, e.g. SessionExpiredError, NetworkError, EXECUTION_FAILED. */
+  public code: string = 'EXECUTION_FAILED';
+  /** Set when the failure was a classified session/navigation problem. */
+  public reason?: SessionCheckReason | undefined;
 
   constructor(
     message: string,
@@ -65,6 +78,10 @@ export class ExecuteInSessionError extends Error {
       this.frameUrl = details.frameUrl;
       this.screenshotPath = details.screenshotPath;
       if (details.cause) this.cause = details.cause;
+      if (details.cause instanceof SessionCheckError) {
+        this.code = details.cause.code;
+        this.reason = details.cause.reason;
+      }
     }
   }
 }
@@ -83,6 +100,17 @@ export type ExecuteInSessionOptions = {
   screenshotOnFailure?: boolean | undefined;
   inspect?: boolean | undefined;
   blockAssets?: boolean | undefined;
+  /**
+   * Verify the target navigation did not land on a login page (default: true). This replaces
+   * a separate pre-flight session check: loading any authenticated page already extends the
+   * ASP.NET sliding session, and the refreshed cookies are returned in the result.
+   */
+  verifyAuth?: boolean | undefined;
+  /**
+   * How to answer alert/confirm/prompt dialogs (default: dismiss). `manual` leaves them to the
+   * script. A Puppeteer script that registers its own `page.on('dialog')` listener always wins.
+   */
+  dialogPolicy?: DialogPolicy | undefined;
 };
 
 export type ExecuteInSessionResult = {
@@ -93,6 +121,10 @@ export type ExecuteInSessionResult = {
   inspection?: PageInspectionResult | undefined;
   cookies: puppeteer.Cookie[];
   screenshotPath: string | null;
+  /** HTTP status of the main navigation response, when available. */
+  httpStatus?: number | undefined;
+  /** Dialogs raised during the run and how they were handled. */
+  dialogs: ExecDialogRecord[];
 };
 
 export type PuppeteerExecContext = {
@@ -103,8 +135,24 @@ export type PuppeteerExecContext = {
   origin: string;
   url: string;
   arg: unknown;
+  /** Alias of `arg`. */
+  args: unknown;
+  fs: typeof import('fs');
+  path: typeof import('path');
+  os: typeof import('os');
+  /** Node-side proxy for the in-browser `eb` helper (results must be JSON-serializable). */
+  eb: Record<string, (...args: unknown[]) => Promise<unknown>>;
   settle: () => Promise<void>;
   inspect: () => Promise<PageInspectionResult>;
+};
+
+export type DialogPolicy = 'accept' | 'dismiss' | 'manual';
+
+export type ExecDialogRecord = {
+  type: string;
+  message: string;
+  defaultValue: string;
+  handled: 'accepted' | 'dismissed' | 'script';
 };
 
 const EBUILDER_HOST_PATTERN = /(^|\.)e-builder\.(net|ca)$/i;
@@ -145,6 +193,7 @@ export function resolveSessionUrl(env: Environment, pathOrUrl?: string): string 
 export async function waitForEBuilderPageToSettle(
   page: puppeteer.Page,
   timeoutMs: number = 15_000,
+  options: { networkIdle?: boolean } = {},
 ): Promise<void> {
   if (typeof page.waitForFunction === 'function') {
     await page
@@ -171,7 +220,7 @@ export async function waitForEBuilderPageToSettle(
           }
 
           const iframe = document.querySelector<HTMLIFrameElement>(
-            'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+            'iframe#contentFrame, iframe[name="contentFrame"]',
           );
           if (iframe) {
             try {
@@ -190,7 +239,7 @@ export async function waitForEBuilderPageToSettle(
       .catch(() => null);
   }
 
-  if (typeof page.waitForNetworkIdle === 'function') {
+  if (options.networkIdle !== false && typeof page.waitForNetworkIdle === 'function') {
     await page.waitForNetworkIdle({ idleTime: 400, timeout: 5_000 }).catch(() => null);
   }
 }
@@ -205,7 +254,7 @@ async function waitForSelectorInPageOrFrame(
       (sel) => {
         if (document.querySelector(sel)) return true;
         const iframe = document.querySelector<HTMLIFrameElement>(
-          'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+          'iframe#contentFrame, iframe[name="contentFrame"]',
         );
         try {
           if (iframe?.contentDocument?.querySelector(sel)) return true;
@@ -227,14 +276,18 @@ export async function inspectPage(page: puppeteer.Page): Promise<PageInspectionR
   return await page.evaluate(() => {
     const getDoc = () => {
       const iframe = document.querySelector<HTMLIFrameElement>(
-        'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+        'iframe#contentFrame, iframe[name="contentFrame"]',
       );
       try {
-        if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
-          return {
-            doc: iframe.contentDocument,
-            frameUrl: iframe.contentWindow?.location?.href || iframe.src || null,
-          };
+        const href = iframe?.contentWindow?.location?.href || iframe?.getAttribute('src') || '';
+        if (
+          iframe &&
+          href &&
+          href !== 'about:blank' &&
+          iframe.contentDocument?.body &&
+          iframe.contentDocument.body.children.length > 0
+        ) {
+          return { doc: iframe.contentDocument, frameUrl: href };
         }
       } catch {}
       return { doc: document, frameUrl: null };
@@ -440,11 +493,22 @@ export async function inspectPage(page: puppeteer.Page): Promise<PageInspectionR
         if (hText) headers.push(hText);
       });
 
+      // e-Builder TableGrid headers are often <td> cells in the first row (sort links).
+      let headerRow: Element | null = null;
+      const isGrid =
+        /TableGrid|rgMasterTable/.test(tbl.className || '') || /grd|Grid/.test(tbl.id || '');
+      if (headers.length === 0 && isGrid) {
+        headerRow = (tbl as HTMLTableElement).rows?.[0] ?? null;
+        headerRow?.querySelectorAll('td').forEach((td, idx) => {
+          headers.push((td.textContent || '').replace(/\s+/g, ' ').trim() || `Column_${idx + 1}`);
+        });
+      }
+
       if (headers.length === 0) return;
 
       const rows: Record<string, string>[] = [];
       const trList = Array.from(tbl.querySelectorAll('tbody tr, tr.rgRow, tr.rgAltRow')).filter(
-        (tr) => !tr.querySelector('th'),
+        (tr) => !tr.querySelector('th') && tr !== headerRow,
       );
       const maxSample = Math.min(trList.length, 25);
 
@@ -489,9 +553,13 @@ const inBrowserEbHelper = `
     if (window.eb) return;
     window.eb = {
       getContentDocument: function() {
-        var iframe = document.querySelector('iframe#contentFrame, iframe[name="contentFrame"], iframe');
+        // Only the e-Builder #contentFrame wrapper counts. Telerik/analytics controls inject
+        // hidden about:blank iframes, which must never be mistaken for page content.
+        var iframe = document.querySelector('iframe#contentFrame, iframe[name="contentFrame"]');
         try {
-          if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
+          var href = (iframe && ((iframe.contentWindow && iframe.contentWindow.location && iframe.contentWindow.location.href) || iframe.getAttribute('src'))) || '';
+          if (iframe && href && href !== 'about:blank' && iframe.contentDocument && iframe.contentDocument.body &&
+              iframe.contentDocument.body.children.length > 0) {
             return iframe.contentDocument;
           }
         } catch(e) {}
@@ -569,12 +637,23 @@ const inBrowserEbHelper = `
         for (var i = 0; i < ths.length; i++) {
           headers.push((ths[i].textContent || '').replace(/\\s+/g, ' ').trim());
         }
+        var headerRow = null;
+        if (headers.length === 0 && tbl.rows && tbl.rows.length > 0) {
+          // e-Builder TableGrid headers are often <td> cells in the first row.
+          headerRow = tbl.rows[0];
+          var htds = headerRow.querySelectorAll('td');
+          for (var hi = 0; hi < htds.length; hi++) {
+            headers.push((htds[hi].textContent || '').replace(/\\s+/g, ' ').trim() || ('Column_' + (hi + 1)));
+          }
+        }
         var rows = [];
-        var trs = tbl.querySelectorAll('tbody tr, tr.rgRow, tr.rgAltRow');
+        var trs = Array.prototype.filter.call(
+          tbl.querySelectorAll('tbody tr, tr.rgRow, tr.rgAltRow'),
+          function(row) { return row !== headerRow && !row.querySelector('th'); }
+        );
         var limit = Math.min(trs.length, maxRows || 50);
         for (var r = 0; r < limit; r++) {
           var tr = trs[r];
-          if (tr.querySelector('th')) continue;
           var tds = tr.querySelectorAll('td');
           var rowObj = {};
           for (var c = 0; c < tds.length; c++) {
@@ -584,10 +663,237 @@ const inBrowserEbHelper = `
           rows.push(rowObj);
         }
         return { headers: headers, rowCount: trs.length, rows: rows };
+      },
+      _resolveForm: function(docOrForm) {
+        var src = docOrForm;
+        if (typeof src === 'string') {
+          src = this.getContentDocument().querySelector(src);
+          if (!src) throw new Error('eb.buildFormParams: no element matches ' + docOrForm);
+        }
+        if (!src) src = this.getContentDocument();
+        if (src.tagName && src.tagName.toUpperCase() === 'FORM') return src;
+        var doc = src.nodeType === 9 ? src : (src.ownerDocument || document);
+        var form = doc.getElementById('aspnetForm') || doc.forms[0];
+        if (!form) throw new Error('eb.buildFormParams: no <form> found');
+        return form;
+      },
+      _fieldName: function(form, shortName) {
+        // ASP.NET prefixes control names (ctl00$ContentPlaceHolder1$btnSave); match either form.
+        var els = form.elements;
+        for (var i = 0; i < els.length; i++) {
+          var n = els[i].name || '';
+          if (n === shortName) return n;
+        }
+        for (var j = 0; j < els.length; j++) {
+          var m = els[j].name || '';
+          if (m.slice(-(shortName.length + 1)) === '$' + shortName) return m;
+        }
+        return shortName;
+      },
+      /**
+       * Serializes an ASP.NET WebForms form (incl. __VIEWSTATE / __EVENTVALIDATION) the way the
+       * browser would, for fast fetch() postbacks. Overrides match full or short control names;
+       * a null override removes the field.
+       */
+      buildFormParams: function(docOrForm, overrides, eventTarget, eventArg) {
+        var form = this._resolveForm(docOrForm);
+        var params = new URLSearchParams();
+        var els = form.elements;
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          if (!el.name || el.disabled) continue;
+          var type = (el.type || '').toLowerCase();
+          if (type === 'submit' || type === 'button' || type === 'image' || type === 'reset' || type === 'file') continue;
+          if ((type === 'checkbox' || type === 'radio') && !el.checked) continue;
+          if (type === 'select-multiple') {
+            for (var o = 0; o < el.options.length; o++) {
+              if (el.options[o].selected) params.append(el.name, el.options[o].value);
+            }
+            continue;
+          }
+          params.append(el.name, el.value);
+        }
+        if (eventTarget !== undefined && eventTarget !== null) {
+          params.set('__EVENTTARGET', eventTarget);
+          params.set('__EVENTARGUMENT', eventArg || '');
+        }
+        var o2 = overrides || {};
+        for (var key in o2) {
+          if (!Object.prototype.hasOwnProperty.call(o2, key)) continue;
+          var name = this._fieldName(form, key);
+          if (o2[key] === null) params.delete(name);
+          else params.set(name, String(o2[key]));
+        }
+        return params;
+      },
+      /** POSTs a WebForms form via fetch(). Resolves { url, status, html, doc }. */
+      postWebForm: function(url, docOrForm, overrides, eventTarget, eventArg) {
+        var form = this._resolveForm(docOrForm);
+        var params = this.buildFormParams(form, overrides, eventTarget, eventArg);
+        var base = (form.ownerDocument && form.ownerDocument.location && form.ownerDocument.location.href) || location.href;
+        if (base === 'about:blank') base = location.href;
+        var target = new URL(url || form.getAttribute('action') || base, base).href;
+        return fetch(target, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString()
+        }).then(function(r) {
+          return r.text().then(function(html) {
+            return { url: r.url, status: r.status, html: html, doc: new DOMParser().parseFromString(html, 'text/html') };
+          });
+        });
+      },
+      _fetchText: function(url, init) {
+        return fetch(url, Object.assign({ credentials: 'include' }, init || {})).then(function(r) {
+          return r.text().then(function(text) {
+            if (!r.ok) throw new Error('HTTP ' + r.status + ' from ' + url);
+            if (/\\/login(\\/|\\.aspx)/i.test(r.url) || /id\\.trimble\\.com/i.test(r.url)) {
+              throw new Error('Session expired: redirected to ' + r.url);
+            }
+            return { text: text, contentType: r.headers.get('content-type') || '', url: r.url };
+          });
+        });
+      },
+      _stripBraces: function(guid) {
+        return String(guid || '').trim().replace(/^\\{|\\}$/g, '');
+      },
+      /**
+       * Fetches a workflow definition: { xml: '<ebWorkflow>...', isActive }.
+       * Reads the designer's securityToken via fetch() (no navigation, so no blocking alerts),
+       * then calls ProcessesService.asmx/GetWorkflowData exactly like the designer does.
+       * version: 3 = published, 1 = saved draft; defaults to the version the designer loads.
+       */
+      getWorkflowData: function(processId, workflowId, version) {
+        var self = this;
+        var pid = this._stripBraces(processId);
+        var wid = this._stripBraces(workflowId);
+        if (!pid || !wid) return Promise.reject(new Error('eb.getWorkflowData(processId, workflowId) requires both GUIDs'));
+        var designerUrl = location.origin + '/da2/Setup/Admin/Processes/WorkflowDesigner.aspx?WorkflowID={' + wid + '}&ProcessID={' + pid + '}&mode=0';
+        var tokenOf = function(html) {
+          var m = html.match(/"token"\\s*:\\s*"([^"]+)"/i) || html.match(/\\btoken\\s*:\\s*['"]([^'"]+)['"]/i);
+          return m ? m[1] : null;
+        };
+        var versionOf = function(html) {
+          var m = html.match(/ucDesigner\\.load\\([^)]*,\\s*(\\d+)\\s*\\)/);
+          return m ? Number(m[1]) : 3;
+        };
+        return this._fetchText(designerUrl).then(function(res) {
+          if (tokenOf(res.text)) return res;
+          if (res.text.indexOf('btnLoadWorkflow') === -1) return res;
+          // "Choose Workflow Version" prompt: choose Published and continue once.
+          var doc = new DOMParser().parseFromString(res.text, 'text/html');
+          var params = self.buildFormParams(self._resolveForm(doc), {
+            'ctl00$contentSection$rbPublished': 'rbPublished',
+            'ctl00$contentSection$btnLoadWorkflow': 'Continue'
+          });
+          return self._fetchText(designerUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+          });
+        }).then(function(res) {
+          var token = tokenOf(res.text);
+          if (!token) throw new Error('Could not extract the workflow designer securityToken from ' + designerUrl);
+          var v = version === undefined || version === null ? versionOf(res.text) : Number(version);
+          return fetch(location.origin + '/da2/Processes/ProcessesService.asmx/GetWorkflowData', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ securityToken: token, processID: pid, workflowID: wid, version: v })
+          });
+        }).then(function(r) {
+          return r.text().then(function(text) {
+            var body = null;
+            try { body = JSON.parse(text); } catch (e) {}
+            if (!r.ok || !body || !body.d) {
+              var msg = (body && (body.Message || body.message)) || ('HTTP ' + r.status);
+              throw new Error('GetWorkflowData failed: ' + msg);
+            }
+            return { xml: body.d.xml, isActive: Boolean(body.d.isActive) };
+          });
+        });
+      },
+      /** Fetches a page layout definition ('<?xml ...><ebLayout>...') by ProcessID + LayoutID. */
+      getLayoutXml: function(processId, layoutId) {
+        var pid = this._stripBraces(processId);
+        var lid = this._stripBraces(layoutId);
+        if (!pid || !lid) return Promise.reject(new Error('eb.getLayoutXml(processId, layoutId) requires both GUIDs'));
+        var url = location.origin + '/da2/Setup/Admin/Processes/AddEditLayout.aspx?rand=' + Math.random() +
+          '&ajaxRefresh=1&LayoutID=' + lid + '&ProcessID=' + pid + '&defSecID=&moduleSecID=&mode=';
+        return this._fetchText(url).then(function(res) {
+          if (!/<ebLayout\\b/.test(res.text)) {
+            throw new Error('Layout request did not return <ebLayout> XML (check the ProcessID/LayoutID)');
+          }
+          return res.text;
+        });
+      },
+      /** Runs a custom report and returns its full CSV export by ReportID GUID. */
+      exportReportCsv: function(reportId) {
+        var self = this;
+        var url = location.origin + '/da2/Reports/ReportResults.aspx?ReportID=' + encodeURIComponent(reportId);
+        return this._fetchText(url).then(function(res) {
+          var doc = new DOMParser().parseFromString(res.text, 'text/html');
+          var form = self._resolveForm(doc);
+          var params = self.buildFormParams(form, { rblExportTypes: '5', btnExportType: 'Export' });
+          return self._fetchText(res.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+          });
+        }).then(function(res) {
+          if (/text\\/html/i.test(res.contentType) && /<html/i.test(res.text)) {
+            throw new Error('Report export returned HTML instead of CSV (check the ReportID or export options)');
+          }
+          return res.text;
+        });
       }
     };
   })();
 `;
+
+const EXPORT_PREFIX = /^\s*(?:export\s+default\b|module\.exports\s*=|exports\.default\s*=)\s*/;
+const EXPORT_LINE =
+  /^([ \t]*)(?:export\s+default\b|module\.exports\s*=|exports\.default\s*=)[ \t]*/m;
+
+/**
+ * Accepts module-style script files as well as bare expressions/functions. Strips a leading
+ * `export default` / `module.exports =` / `exports.default =`; when helpers precede the export,
+ * wraps the file in an IIFE that returns the exported value.
+ */
+export function normalizeUserScript(rawScript: string): string {
+  let code = rawScript
+    .replace(/^\uFEFF/, '')
+    .replace(/^#!.*\n/, '')
+    .trim();
+  if (EXPORT_PREFIX.test(code)) {
+    code = code.replace(EXPORT_PREFIX, '');
+  } else if (EXPORT_LINE.test(code)) {
+    code = `(() => {\n${code.replace(EXPORT_LINE, '$1return ')}\n})()`;
+  }
+  return code.replace(/;\s*$/, '');
+}
+
+const PUPPETEER_PARAM_DESTRUCTURE =
+  /^\s*(?:async\s+)?(?:function\s*\w*\s*)?\(\s*\{[^}]*\b(?:page|browser|context|eb|fs|path|os|settle|inspect|origin)\b[^}]*\}/;
+const BARE_PAGE_PARAM = /^\s*(?:async\s+)?(?:(?:function\s*\w*\s*)?\(\s*page\s*[,)]|page\s*=>)/;
+const PAGE_API_CALL =
+  /\bpage\.(?:goto|evaluate|\$eval|\$\$eval|\$|\$\$|click|type|waitForSelector|waitForNavigation|waitForFunction|waitForNetworkIdle|frames|mainFrame|setRequestInterception|screenshot|keyboard|mouse|on)\b/;
+
+/** Heuristic: does this (normalized) script expect the Node Puppeteer context? */
+export function looksLikePuppeteerScript(code: string): boolean {
+  const normalized = normalizeUserScript(code);
+  return (
+    PUPPETEER_PARAM_DESTRUCTURE.test(normalized) ||
+    BARE_PAGE_PARAM.test(normalized) ||
+    PAGE_API_CALL.test(normalized)
+  );
+}
+
+/** Injects the in-browser `window.eb` helper into the page (idempotent). */
+export async function injectEbHelper(page: puppeteer.Page): Promise<void> {
+  await page.evaluate(inBrowserEbHelper);
+}
 
 async function evaluateDomScript(
   page: puppeteer.Page,
@@ -598,6 +904,7 @@ async function evaluateDomScript(
     await page.evaluate(inBrowserEbHelper).catch(() => {});
   }
 
+  const normalizedScript = normalizeUserScript(script);
   return await page.evaluate(
     async (code: string, passedArg: unknown) => {
       const eb = (window as any).eb;
@@ -624,7 +931,7 @@ async function evaluateDomScript(
         }
       }
     },
-    script,
+    normalizedScript,
     arg,
   );
 }
@@ -633,12 +940,10 @@ async function evaluatePuppeteerScript(
   script: string,
   execContext: PuppeteerExecContext,
 ): Promise<unknown> {
+  const code = normalizeUserScript(script);
+  let evaluated: unknown;
   try {
-    const evaluated = (0, eval)(`(${script})`);
-    if (typeof evaluated === 'function') {
-      return await evaluated(execContext);
-    }
-    return await evaluated;
+    evaluated = (0, eval)(`(${code})`);
   } catch (err) {
     if (!(err instanceof SyntaxError)) {
       throw err;
@@ -646,10 +951,54 @@ async function evaluatePuppeteerScript(
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const fn = new AsyncFunction(
       'ctx',
-      'const { page, browser, context, env, origin, url, arg, settle, inspect } = ctx;\n' + script,
+      'const { page, browser, context, env, origin, url, arg, args, fs, path, os, eb, settle, inspect } = ctx;\n' +
+        code,
     );
     return await fn(execContext);
   }
+
+  if (typeof evaluated === 'function') {
+    // Agents often write `async (page) => ...`; hand them the page instead of the context.
+    if (BARE_PAGE_PARAM.test(Function.prototype.toString.call(evaluated))) {
+      return await evaluated(execContext.page, execContext.arg, execContext);
+    }
+    return await evaluated(execContext);
+  }
+  return await evaluated;
+}
+
+/**
+ * Node-side proxy for the in-browser `window.eb` helper: `await eb.getTable('#grid')` runs the
+ * helper inside the page and returns its (JSON-serializable) result.
+ */
+function createNodeEbHelper(
+  page: puppeteer.Page,
+): Record<string, (...args: unknown[]) => Promise<unknown>> {
+  return new Proxy({} as Record<string, (...args: unknown[]) => Promise<unknown>>, {
+    get(_target, method) {
+      if (typeof method !== 'string' || method === 'then') return undefined;
+      return async (...callArgs: unknown[]) => {
+        await page.evaluate(inBrowserEbHelper).catch(() => {});
+        return await page.evaluate(
+          async (m: string, a: unknown[]) => {
+            const helper = (window as any).eb;
+            if (!helper || typeof helper[m] !== 'function') {
+              throw new Error(`eb.${m} is not a function`);
+            }
+            const out = await helper[m](...a);
+            if (out instanceof URLSearchParams) return out.toString();
+            if (out && typeof out === 'object' && 'doc' in out && out.doc instanceof Document) {
+              const { doc: _doc, ...rest } = out;
+              return rest;
+            }
+            return out;
+          },
+          method,
+          callArgs,
+        );
+      };
+    },
+  });
 }
 
 /**
@@ -673,7 +1022,10 @@ export async function executeInSession(
     screenshotOnFailure = true,
     inspect = false,
     blockAssets,
+    verifyAuth = true,
+    dialogPolicy = 'dismiss',
   } = options;
+  const dialogs: ExecDialogRecord[] = [];
 
   const origin = `https://${env}.${baseurl}`;
   const targetUrl = resolveSessionUrl(env, url);
@@ -682,6 +1034,8 @@ export async function executeInSession(
     (await BrowserManager.getInstance().getBrowser(
       headless,
       headless ? ['--window-size=1440,900'] : undefined,
+      false,
+      { allowDaemon: true },
     ));
 
   const context = await browserInstance.createBrowserContext();
@@ -699,15 +1053,61 @@ export async function executeInSession(
     await optimizePageForAutomation(page, { blockAssets: shouldBlockAssets });
 
     if (typeof page.on === 'function') {
-      page.on('dialog', async (dialog) => {
+      const pageRef = page;
+      pageRef.on('dialog', async (dialog: puppeteer.Dialog) => {
+        const record: ExecDialogRecord = {
+          type: dialog.type(),
+          message: dialog.message(),
+          defaultValue: dialog.defaultValue(),
+          handled: 'script',
+        };
+        dialogs.push(record);
+        // Yield to a script-registered listener (ours is always registered first).
+        const listenerCount =
+          typeof pageRef.listenerCount === 'function' ? pageRef.listenerCount('dialog') : 1;
+        if (dialogPolicy === 'manual' || listenerCount > 1) return;
         try {
-          await dialog.dismiss();
+          if (dialogPolicy === 'accept') {
+            await dialog.accept();
+            record.handled = 'accepted';
+          } else {
+            await dialog.dismiss();
+            record.handled = 'dismissed';
+          }
         } catch {}
       });
     }
 
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+    let httpStatus: number | undefined;
+    try {
+      const response = await page.goto(targetUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: 90_000,
+      });
+      httpStatus = typeof response?.status === 'function' ? response.status() : undefined;
+    } catch (navErr) {
+      const reason = classifyNavigationError(navErr);
+      if (reason) {
+        throw sessionCheckErrorFor(
+          {
+            reason,
+            errorMessage: navErr instanceof Error ? navErr.message : String(navErr),
+            landedUrl: safePageUrl(page),
+          },
+          origin,
+          navErr,
+        );
+      }
+      throw navErr;
+    }
     await waitForEBuilderPageToSettle(page);
+
+    if (verifyAuth && (await detectLoginPage(page))) {
+      throw sessionCheckErrorFor(
+        { reason: 'redirected_to_login', landedUrl: safePageUrl(page) },
+        origin,
+      );
+    }
 
     if (waitForSelector) {
       await waitForSelectorInPageOrFrame(page, waitForSelector);
@@ -727,7 +1127,7 @@ export async function executeInSession(
       try {
         const meta = await page.evaluate(() => {
           const iframe = document.querySelector<HTMLIFrameElement>(
-            'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+            'iframe#contentFrame, iframe[name="contentFrame"]',
           );
           let innerHref: string | null = null;
           try {
@@ -743,7 +1143,7 @@ export async function executeInSession(
         if (!title && meta?.docTitle) {
           title = meta.docTitle;
         }
-        if (meta?.innerHref) {
+        if (meta?.innerHref && meta.innerHref !== 'about:blank') {
           frameUrl = meta.innerHref;
         }
       } catch {}
@@ -765,6 +1165,11 @@ export async function executeInSession(
           origin,
           url: finalUrl,
           arg,
+          args: arg,
+          fs,
+          path,
+          os,
+          eb: createNodeEbHelper(page),
           settle: () => waitForEBuilderPageToSettle(page!),
           inspect: () => inspectPage(page!),
         });
@@ -798,6 +1203,8 @@ export async function executeInSession(
       inspection,
       cookies: updatedCookies,
       screenshotPath: screenshotPath ?? null,
+      httpStatus,
+      dialogs,
     };
   } catch (err: any) {
     if (page) {
@@ -808,7 +1215,7 @@ export async function executeInSession(
           const meta = await page
             .evaluate(() => {
               const iframe = document.querySelector<HTMLIFrameElement>(
-                'iframe#contentFrame, iframe[name="contentFrame"], iframe',
+                'iframe#contentFrame, iframe[name="contentFrame"]',
               );
               return iframe?.src || null;
             })

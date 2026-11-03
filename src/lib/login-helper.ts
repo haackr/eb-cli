@@ -142,26 +142,42 @@ async function accountSpecifier(accounts: eb.Account[]): Promise<Account> {
   return selectedAccount;
 }
 
+/**
+ * Re-validates a stored session by loading the e-Builder home page with its cookies, persisting
+ * the refreshed cookies on success. Returns the structured check result; never throws.
+ * Callers must only treat `reason === 'redirected_to_login'` as proof the session is dead.
+ */
 export async function refreshSessionIfNeeded(
   sessionId: number,
   headless: boolean = true,
-): Promise<boolean> {
-  try {
-    const session = db.getSessionById(sessionId) as
-      { environment: string; session_cookies: string } | undefined;
-    if (!session) return false;
+): Promise<eb.SessionCheckResult> {
+  const session = db.getSessionById(sessionId) as
+    { environment: string; session_cookies: string } | undefined;
+  if (!session) {
+    return {
+      isLoggedIn: false,
+      reason: 'unknown',
+      errorMessage: `Session ${sessionId} not found`,
+      newCookies: [],
+    };
+  }
 
+  try {
     const env = eb.getEnvironment(session.environment);
     const cookies = JSON.parse(session.session_cookies);
 
     const loginCheck = await eb.isLoggedIn(env, headless, cookies);
     if (loginCheck.isLoggedIn) {
       db.updateSessionCookies(sessionId, JSON.stringify(loginCheck.newCookies));
-      return true;
     }
-    return false;
-  } catch {
-    return false;
+    return loginCheck;
+  } catch (err) {
+    return {
+      isLoggedIn: false,
+      reason: eb.classifyNavigationError(err) ?? 'unknown',
+      errorMessage: err instanceof Error ? err.message : String(err),
+      newCookies: [],
+    };
   }
 }
 

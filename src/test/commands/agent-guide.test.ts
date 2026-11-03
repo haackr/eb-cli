@@ -11,6 +11,16 @@ describe('Agent Guide Command (src/commands/agent/guide.ts)', () => {
     assert.ok(result.workflows.pageInspection);
     assert.ok(result.browserHelperApi['eb.findField(nameOrLabel)']);
     assert.strictEqual(result.standardPaths.home, '/da2/Home/index2.aspx');
+    assert.strictEqual(result.standardPaths.reportsList, '/da2/Reports/index.aspx');
+    assert.ok(!JSON.stringify(result.standardPaths).includes('ProcessTypesView'));
+    assert.ok(result.errorCodes.NetworkError);
+    assert.ok(result.browserHelperApi['eb.exportReportCsv(reportId)']);
+    assert.ok(result.browserHelperApi['eb.getWorkflowData(processId, workflowId, version?)']);
+    assert.ok(result.browserHelperApi['eb.getLayoutXml(processId, layoutId)']);
+    assert.ok(!JSON.stringify(result).includes('DownloadWorkflowHandler'));
+    assert.match(result.standardPaths.workflowDataRpc, /\/da2\/Processes\/ProcessesService\.asmx/);
+    assert.match(result.workflows.puppeteerEvaluation.description, /async \(\{ page/);
+    assert.match(result.workflows.sessionSelection.description, /--account/);
   });
 
   it('outputs formatted markdown guide without --json', async () => {
@@ -28,5 +38,7 @@ describe('Agent Guide Command (src/commands/agent/guide.ts)', () => {
 
     assert.ok(logged.includes('# Trimble e-Builder AI Agent Automation Guide'));
     assert.ok(logged.includes('eb session exec <relative-path> --inspect --json'));
+    assert.ok(logged.includes('| `eb.getTable(selectorOrId, maxRows)` |'));
+    assert.ok(!logged.includes('\\`'));
   });
 });

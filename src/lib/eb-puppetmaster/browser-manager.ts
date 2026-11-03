@@ -6,6 +6,7 @@ import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { createRequire } from 'module';
+import { connectToDaemon } from './browser-daemon.js';
 
 const require = createRequire(import.meta.url);
 
@@ -120,6 +121,8 @@ export class BrowserManager {
   private static instance: BrowserManager;
   private browser: puppeteer.Browser | null = null;
   private currentHeadless: boolean | null = null;
+  /** True when `browser` is a connection to the shared warm-browser daemon (never close it). */
+  private isDaemon = false;
 
   constructor() {
     // Register cleanup handlers for process shutdown
@@ -128,8 +131,8 @@ export class BrowserManager {
     };
 
     process.on('exit', () => {
-      // Synchronous cleanup for exit
-      if (this.browser) {
+      // Synchronous cleanup for exit. A daemon browser is shared: just drop the connection.
+      if (this.browser && !this.isDaemon) {
         this.browser.close().catch(console.error);
       }
     });
@@ -164,11 +167,39 @@ export class BrowserManager {
     return BrowserManager.instance;
   }
 
+  /**
+   * Returns a browser, launching one if needed.
+   *
+   * @param options.allowDaemon - Reuse the warm-browser daemon when available (headless only).
+   *   Only pass this from callers that do all work inside their own `createBrowserContext()`
+   *   and close it, so no cookies or pages persist in the shared browser.
+   */
   async getBrowser(
     headless: boolean = true,
     args?: string[],
     useUserChrome: boolean = false,
+    options: { allowDaemon?: boolean } = {},
   ): Promise<puppeteer.Browser> {
+    const wantDaemon = Boolean(options.allowDaemon) && headless && !useUserChrome;
+
+    // Never hand the shared daemon browser to a caller that did not opt in.
+    if (this.browser && this.isDaemon && !wantDaemon) {
+      await this.browser.disconnect().catch(() => {});
+      this.browser = null;
+      this.isDaemon = false;
+      this.currentHeadless = null;
+    }
+
+    if (wantDaemon && (!this.browser || !this.browser.connected)) {
+      const daemonBrowser = await connectToDaemon();
+      if (daemonBrowser) {
+        this.browser = daemonBrowser;
+        this.isDaemon = true;
+        this.currentHeadless = true;
+        return daemonBrowser;
+      }
+    }
+
     // Check if browser is truly connected by testing it
     let needsRelaunch = false;
     if (!this.browser || !this.browser.connected) {
@@ -185,16 +216,18 @@ export class BrowserManager {
     }
 
     if (needsRelaunch) {
-      // Close existing browser if it exists
+      // Close existing browser if it exists (only disconnect from a shared daemon)
       if (this.browser) {
         try {
           if (this.browser.connected) {
-            await this.browser.close();
+            if (this.isDaemon) await this.browser.disconnect();
+            else await this.browser.close();
           }
         } catch {
           // Ignore errors during close
         }
         this.browser = null;
+        this.isDaemon = false;
       }
       this.currentHeadless = headless;
       const requiredArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
@@ -285,12 +318,25 @@ export class BrowserManager {
     return this.browser;
   }
 
+  /** Closes a locally launched browser, or just disconnects from the shared daemon. */
   async closeBrowser(): Promise<void> {
     if (this.browser) {
-      await this.browser.close();
+      const browser = this.browser;
+      const wasDaemon = this.isDaemon;
       this.browser = null;
+      this.isDaemon = false;
       this.currentHeadless = null;
+      if (wasDaemon) {
+        await browser.disconnect().catch(() => {});
+      } else {
+        await browser.close();
+      }
     }
+  }
+
+  /** Whether the current browser is a connection to the warm-browser daemon. */
+  isUsingDaemon(): boolean {
+    return this.isDaemon && Boolean(this.browser?.connected);
   }
 }
 

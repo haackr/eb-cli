@@ -3,6 +3,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Environment, baseurl, BrowserManager } from './index.js';
+import {
+  classifyNavigationError,
+  isLoginUrl,
+  detectLoginPage,
+  safePageUrl,
+  type SessionCheckResult,
+} from './session-check.js';
 
 // Selectors for the login page
 const usernameSelector =
@@ -64,7 +71,12 @@ async function selectAccount(
 }
 
 function isTrimbleIdPage(page: puppeteer.Page): boolean {
-  return new URL(page.url()).hostname === 'id.trimble.com';
+  try {
+    const host = new URL(page.url()).hostname.toLowerCase();
+    return host === 'id.trimble.com' || host.endsWith('.id.trimble.com');
+  } catch {
+    return false;
+  }
 }
 
 async function getTrimbleIdPage(browser: puppeteer.Browser): Promise<puppeteer.Page | undefined> {
@@ -152,12 +164,7 @@ export function isEBuilderAuthenticatedUrl(url: URL, env: Environment): boolean 
   if (!isEBuilderDomain) return false;
 
   const path = url.pathname.toLowerCase();
-  if (
-    path.startsWith('/auth/') ||
-    path.startsWith('/login/') ||
-    path.includes('loginsequence') ||
-    path.includes('signin')
-  ) {
+  if (isLoginUrl(url.href) || path.includes('signin')) {
     return false;
   }
 
@@ -501,6 +508,9 @@ async function domType(
       if (el) {
         el.scrollIntoView({ block: 'center', inline: 'center' });
         el.focus();
+        el.value = '';
+        el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
       }
     }, selector);
 
@@ -508,10 +518,6 @@ async function domType(
       await elementHandle.focus().catch(() => {});
     }
 
-    await page.keyboard.down('Meta').catch(() => {});
-    await page.keyboard.press('a').catch(() => {});
-    await page.keyboard.up('Meta').catch(() => {});
-    await page.keyboard.press('Backspace').catch(() => {});
     await page.keyboard.type(text, { delay: 40 });
 
     return await page.evaluate(
@@ -528,8 +534,8 @@ async function domType(
             } else {
               el.value = val;
             }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
           }
           return true;
         }
@@ -581,32 +587,50 @@ async function completeTrimbleIdLogin(
   // 1. Trimble ID Username
   if (username) {
     const usernameInput = await authPage
-      .waitForSelector('#username-field, input[name="username"]', {
+      .waitForSelector('#username-field, #username_email, input[name="username"]', {
         visible: true,
         timeout: 15_000,
       })
       .catch(() => null);
 
     if (usernameInput) {
-      await domType(authPage, '#username-field, input[name="username"]', username, usernameInput);
+      await domType(
+        authPage,
+        '#username-field, #username_email, input[name="username"]',
+        username,
+        usernameInput,
+      );
       await new Promise((r) => setTimeout(r, 200));
       await authPage.evaluate(() => {
         const nextBtn =
           document.querySelector<HTMLButtonElement>('#enter_username_submit') ||
           document.querySelector<HTMLButtonElement>('button[name="username-submit"]') ||
-          Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-            (b.textContent || '').trim().toLowerCase().includes('next'),
-          );
-        nextBtn?.click();
+          Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            return (
+              (txt === 'next' ||
+                txt === 'continue' ||
+                txt.includes('next') ||
+                txt.includes('continue')) &&
+              !txt.includes('passkey') &&
+              !txt.includes('different')
+            );
+          });
+        if (nextBtn) {
+          nextBtn.removeAttribute('disabled');
+          (nextBtn as any).disabled = false;
+          nextBtn.click();
+        }
       });
-      await new Promise((r) => setTimeout(r, 1500));
+      await authPage.keyboard.press('Enter').catch(() => {});
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 
   // 2. Trimble ID Password
   if (password) {
     const passwordInput = await authPage.waitForSelector(
-      'input[name="password"], input[type="password"], #password',
+      '#login-password-input, input[name="password"], input[type="password"], #password',
       {
         visible: true,
         timeout: 30_000,
@@ -616,7 +640,7 @@ async function completeTrimbleIdLogin(
     if (passwordInput) {
       await domType(
         authPage,
-        'input[name="password"], input[type="password"], #password',
+        '#login-password-input, input[name="password"], input[type="password"], #password',
         password,
         passwordInput,
       );
@@ -625,12 +649,26 @@ async function completeTrimbleIdLogin(
         const signInBtn =
           document.querySelector<HTMLButtonElement>('button[name="password-submit"]') ||
           document.querySelector<HTMLButtonElement>('#button_sign_in') ||
-          Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-            (b.textContent || '').trim().toLowerCase().includes('sign in'),
-          );
-        signInBtn?.click();
+          Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) => {
+            const txt = (b.textContent || '').trim().toLowerCase();
+            return (
+              (txt === 'sign in' ||
+                txt === 'continue' ||
+                txt.includes('sign in') ||
+                txt.includes('continue')) &&
+              !txt.includes('passkey') &&
+              !txt.includes('forgot') &&
+              !txt.includes('different')
+            );
+          });
+        if (signInBtn) {
+          signInBtn.removeAttribute('disabled');
+          (signInBtn as any).disabled = false;
+          signInBtn.click();
+        }
       });
-      await new Promise((r) => setTimeout(r, 1500));
+      await authPage.keyboard.press('Enter').catch(() => {});
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 
@@ -646,14 +684,33 @@ async function completeTrimbleIdLogin(
         break;
       }
 
+      // Check for account lockout or rate limiting
+      const maxAttemptsError = await authPage
+        .evaluate(() => {
+          const text = document.body?.innerText?.toLowerCase() || '';
+          return (
+            text.includes('maximum number of attempts') ||
+            text.includes('too many attempts') ||
+            text.includes('account has been locked')
+          );
+        })
+        .catch(() => false);
+      if (maxAttemptsError) {
+        throw new Error(
+          'Trimble ID: You have reached the maximum number of attempts. Please try again later.',
+        );
+      }
+
       // Check if code was rejected and needs retry
       const hasCodeError = await authPage
         .evaluate(() => {
           const text = document.body?.innerText?.toLowerCase() || '';
           return (
-            text.includes('invalid code') ||
-            text.includes('incorrect code') ||
-            text.includes('try again')
+            (text.includes('invalid code') ||
+              text.includes('incorrect code') ||
+              text.includes('code is incorrect') ||
+              text.includes('the code you entered')) &&
+            !text.includes('maximum number of attempts')
           );
         })
         .catch(() => false);
@@ -667,7 +724,7 @@ async function completeTrimbleIdLogin(
       const hasCodeInput = await authPage
         .evaluate(() => {
           const el = document.querySelector<HTMLInputElement>(
-            '#verification_code, input[name="code"], input[name="verification_code"], input[name*="code" i], input[id*="code" i], input[inputmode="numeric"]',
+            '#mfa-totp-code-input, #verification_code, input[autocomplete="one-time-code"], input[name="code"], input[name="verification_code"], input[name*="code" i], input[id*="code" i], input[inputmode="numeric"]',
           );
           return Boolean(el);
         })
@@ -680,34 +737,10 @@ async function completeTrimbleIdLogin(
           if (totp) {
             console.log('[eb-cli] Typing TOTP code and submitting...');
 
-            // Set value via native setter + synthetic events
-            await authPage.evaluate((totpVal) => {
-              const input = document.querySelector<HTMLInputElement>(
-                '#verification_code, input[name="code"], input[name="verification_code"], input[name*="code" i], input[id*="code" i], input[inputmode="numeric"]',
-              );
-              if (input) {
-                input.focus();
-                const setter = Object.getOwnPropertyDescriptor(
-                  window.HTMLInputElement.prototype,
-                  'value',
-                )?.set;
-                if (setter) {
-                  setter.call(input, totpVal);
-                } else {
-                  input.value = totpVal;
-                }
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-              }
-            }, totp);
-
-            // Also type via keyboard to trigger key events
-            await authPage.focus('#verification_code, input[name="code"]').catch(() => {});
-            await authPage.keyboard.down('Meta').catch(() => {});
-            await authPage.keyboard.press('a').catch(() => {});
-            await authPage.keyboard.up('Meta').catch(() => {});
-            await authPage.keyboard.press('Backspace').catch(() => {});
-            await authPage.keyboard.type(totp, { delay: 40 });
+            const totpSelector =
+              '#mfa-totp-code-input, #verification_code, input[autocomplete="one-time-code"], input[name="code"], input[name="verification_code"], input[name*="code" i], input[id*="code" i], input[inputmode="numeric"]';
+            const totpInput = await authPage.$(totpSelector);
+            await domType(authPage, totpSelector, totp, totpInput);
 
             totpSubmitted = true;
             lastSubmitTime = Date.now();
@@ -730,7 +763,14 @@ async function completeTrimbleIdLogin(
                     .trim()
                     .toLowerCase();
                   return (
-                    txt === 'submit' || txt === 'verify' || txt === 'continue' || txt === 'next'
+                    (txt === 'submit' ||
+                      txt === 'verify' ||
+                      txt === 'continue' ||
+                      txt === 'next') &&
+                    !txt.includes('passkey') &&
+                    !txt.includes('email') &&
+                    !txt.includes('cancel') &&
+                    !txt.includes('recover')
                   );
                 });
               if (submitBtn) {
@@ -758,7 +798,13 @@ async function completeTrimbleIdLogin(
                 const txt = (b.textContent || (b as HTMLInputElement).value || '')
                   .trim()
                   .toLowerCase();
-                return txt === 'submit' || txt === 'verify' || txt === 'continue' || txt === 'next';
+                return (
+                  (txt === 'submit' || txt === 'verify' || txt === 'continue' || txt === 'next') &&
+                  !txt.includes('passkey') &&
+                  !txt.includes('email') &&
+                  !txt.includes('cancel') &&
+                  !txt.includes('recover')
+                );
               });
             if (submitBtn) {
               submitBtn.removeAttribute('disabled');
@@ -795,13 +841,14 @@ async function completeTrimbleIdLogin(
             return;
           }
 
-          // Otherwise look for "More options" or "Try another way"
+          // Otherwise look for "More options" or "Try another way" / "different method"
           const moreOptions = allElements.find((el) => {
             const txt = (el.textContent || '').trim().toLowerCase();
             return (
               txt.includes('more options') ||
               txt.includes('another way') ||
-              txt.includes('other options')
+              txt.includes('other options') ||
+              txt.includes('different method')
             );
           });
           if (moreOptions && moreOptions instanceof HTMLElement) {
@@ -812,12 +859,26 @@ async function completeTrimbleIdLogin(
 
       // If no TOTP handler was provided, fall back to passkey button
       if (!getTotp) {
-        await domClick(authPage, '#button_verify_passkey');
+        const clicked = await domClick(authPage, '#button_verify_passkey');
+        if (!clicked) {
+          await authPage.evaluate(() => {
+            const passkeyBtn = Array.from(
+              document.querySelectorAll<HTMLButtonElement>('button'),
+            ).find((b) => {
+              const txt = (b.textContent || '').trim().toLowerCase();
+              return txt.includes('passkey') || txt.includes('use a passkey');
+            });
+            passkeyBtn?.click();
+          });
+        }
       }
 
       await new Promise((r) => setTimeout(r, 500));
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('maximum number of attempts')) {
+      throw error;
+    }
     // Continue waiting for redirect
   }
 
@@ -1043,18 +1104,24 @@ export async function loginWithSso(
   return await browser.cookies();
 }
 
+/**
+ * Navigates to the e-Builder home page with the given cookies and reports whether the session
+ * is authenticated. Never throws for navigation failures: network errors, timeouts, and HTTP 5xx
+ * responses are reported via `reason` so callers can avoid treating them as expired sessions.
+ */
 export async function isLoggedIn(
   env: Environment,
   headless: boolean = true,
   cookies: puppeteer.Cookie[],
   browser?: puppeteer.Browser,
-): Promise<{ isLoggedIn: boolean; newCookies: puppeteer.Cookie[] }> {
-  let loggedIn = false;
-  let newCookies: puppeteer.Cookie[] = [];
+): Promise<SessionCheckResult> {
   if (!browser) {
-    browser = await BrowserManager.getInstance().getBrowser(headless, [
-      `--app=http://${env}.${baseurl}`,
-    ]);
+    browser = await BrowserManager.getInstance().getBrowser(
+      headless,
+      [`--app=http://${env}.${baseurl}`],
+      false,
+      { allowDaemon: true },
+    );
   }
 
   // Create a new browser context for isolation
@@ -1064,38 +1131,69 @@ export async function isLoggedIn(
   page.setDefaultTimeout(90_000);
 
   try {
-    // Clear existing cookies and set new ones
-    await context.setCookie(...cookies);
-    await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 90_000,
-    });
-
+    let response: puppeteer.HTTPResponse | null | undefined;
     try {
-      await page.waitForSelector(myHomeTabSelector, {
-        timeout: 5000,
+      await context.setCookie(...cookies);
+      response = await page.goto(`https://${env}.${baseurl}/da2/Home/index2.aspx`, {
+        waitUntil: 'domcontentloaded',
+        timeout: 90_000,
       });
-      loggedIn = true;
-      newCookies = await context.cookies();
-    } catch {
-      try {
-        await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
-        loggedIn = await isEBuilderPageAuthenticated(page, env);
-        if (loggedIn) {
-          newCookies = await context.cookies();
-        }
-      } catch {
-        loggedIn = false;
-      }
+    } catch (err) {
+      return {
+        isLoggedIn: false,
+        reason: classifyNavigationError(err) ?? 'unknown',
+        errorMessage: err instanceof Error ? err.message : String(err),
+        landedUrl: safePageUrl(page),
+        newCookies: [],
+      };
     }
-  } catch {
-    loggedIn = false;
+
+    let loggedIn = false;
+    try {
+      await page.waitForSelector(myHomeTabSelector, { timeout: 5000 });
+      loggedIn = true;
+    } catch {
+      if (typeof page.waitForNetworkIdle === 'function') {
+        await page.waitForNetworkIdle({ idleTime: 500, timeout: 5000 }).catch(() => null);
+      }
+      loggedIn = await isEBuilderPageAuthenticated(page, env);
+    }
+
+    const landedUrl = safePageUrl(page);
+    if (loggedIn) {
+      return {
+        isLoggedIn: true,
+        reason: 'authenticated',
+        landedUrl,
+        newCookies: await context.cookies(),
+      };
+    }
+
+    if (await detectLoginPage(page)) {
+      return { isLoggedIn: false, reason: 'redirected_to_login', landedUrl, newCookies: [] };
+    }
+
+    const status = typeof response?.status === 'function' ? response.status() : undefined;
+    if (status !== undefined && status >= 500) {
+      return {
+        isLoggedIn: false,
+        reason: 'server_error',
+        errorMessage: `HTTP ${status}`,
+        landedUrl,
+        newCookies: [],
+      };
+    }
+
+    return {
+      isLoggedIn: false,
+      reason: 'unknown',
+      errorMessage: 'Authenticated page markers not found',
+      landedUrl,
+      newCookies: [],
+    };
+  } finally {
+    await context.close().catch(() => {});
   }
-
-  // Close the context to clean up
-  await context.close().catch(() => {});
-
-  return { isLoggedIn: loggedIn, newCookies: newCookies };
 }
 
 export async function logout(

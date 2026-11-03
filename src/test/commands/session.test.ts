@@ -107,32 +107,73 @@ describe('Session Commands (src/commands/session/)', () => {
       ]);
     });
 
-    it('deletes invalid sessions from the database', async () => {
-      db.addSession('invalid@example.com', 'us1', 'Acct1', '[]');
-
-      const mockBrowser: any = {
-        connected: true,
-        createBrowserContext: async () => ({
-          newPage: async () => ({
-            setDefaultNavigationTimeout: () => {},
-            setDefaultTimeout: () => {},
-            goto: async () => {},
-            waitForSelector: async () => {
-              throw new Error('Not logged in');
-            },
-          }),
-          setCookie: async () => {},
-          cookies: async () => [],
-          close: async () => {},
+    const mockBrowserLandingOn = (landedUrl: string, gotoError?: Error): any => ({
+      connected: true,
+      createBrowserContext: async () => ({
+        newPage: async () => ({
+          setDefaultNavigationTimeout: () => {},
+          setDefaultTimeout: () => {},
+          url: () => landedUrl,
+          goto: async () => {
+            if (gotoError) throw gotoError;
+          },
+          waitForSelector: async () => {
+            throw new Error('Not logged in');
+          },
+          evaluate: async () => false,
         }),
-      };
+        setCookie: async () => {},
+        cookies: async () => [],
+        close: async () => {},
+      }),
+    });
 
-      eb.BrowserManager.getInstance().getBrowser = async () => mockBrowser;
+    it('deletes sessions redirected to login when --delete is passed', async () => {
+      db.addSession('expired@example.com', 'us1', 'Acct1', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowserLandingOn('https://app.e-builder.net/Login/Login.aspx?ReturnUrl=%2fda2');
 
-      await SessionTest.run([]);
+      const results: any = await SessionTest.run(['--json', '--delete']);
+      assert.strictEqual(results[0].reason, 'redirected_to_login');
+      assert.strictEqual(results[0].deleted, true);
+      assert.strictEqual(db.getSessions().length, 0);
+    });
 
-      const sessions = db.getSessions();
-      assert.strictEqual(sessions.length, 0);
+    it('does not delete expired sessions by default', async () => {
+      db.addSession('expired-kept@example.com', 'us1', 'Acct1', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowserLandingOn('https://id.trimble.com/ui/sign_in.html');
+
+      const results: any = await SessionTest.run(['--json']);
+      assert.strictEqual(results[0].reason, 'redirected_to_login');
+      assert.strictEqual(results[0].deleted, false);
+      assert.strictEqual(db.getSessions().length, 1);
+    });
+
+    it('never deletes on network errors, even with --delete', async () => {
+      db.addSession('sandboxed@example.com', 'us1', 'Acct1', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowserLandingOn('about:blank', new Error('net::ERR_INTERNET_DISCONNECTED'));
+
+      const results: any = await SessionTest.run(['--json', '--delete']);
+      assert.strictEqual(results[0].valid, false);
+      assert.strictEqual(results[0].reason, 'network_error');
+      assert.match(results[0].error, /NOT invalidated/);
+      assert.strictEqual(results[0].deleted, false);
+      assert.strictEqual(db.getSessions().length, 1);
+    });
+
+    it('never deletes on navigation timeouts, even with --delete', async () => {
+      db.addSession('slow@example.com', 'us1', 'Acct1', '[]');
+      const timeout = new Error('Navigation timeout of 90000 ms exceeded');
+      timeout.name = 'TimeoutError';
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        mockBrowserLandingOn('about:blank', timeout);
+
+      const results: any = await SessionTest.run(['--json', '--delete']);
+      assert.strictEqual(results[0].reason, 'timeout');
+      assert.strictEqual(results[0].deleted, false);
+      assert.strictEqual(db.getSessions().length, 1);
     });
 
     it('returns structured JSON array and retains sessions when --no-delete is passed', async () => {
@@ -374,6 +415,163 @@ describe('Session Commands (src/commands/session/)', () => {
       assert.strictEqual(result.success, false);
       assert.ok(result.error);
       assert.match(result.error.message, /Navigation failed/);
+    });
+
+    const execMockBrowser = (opts: {
+      landedUrl: string;
+      gotoError?: Error;
+      contexts?: { count: number };
+    }): any => ({
+      connected: true,
+      createBrowserContext: async () => {
+        if (opts.contexts) opts.contexts.count++;
+        return {
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            on: () => {},
+            goto: async () => {
+              if (opts.gotoError) throw opts.gotoError;
+            },
+            url: () => opts.landedUrl,
+            title: async () => 'Page',
+            waitForSelector: async () => ({}),
+            waitForFunction: async () => ({}),
+            waitForNetworkIdle: async () => ({}),
+            evaluate: async () => ({ docTitle: 'Page', innerHref: null }),
+            close: async () => {},
+          }),
+          setCookie: async () => {},
+          cookies: async () => [{ name: 'sid', value: 'fresh' }],
+          close: async () => {},
+        };
+      },
+    });
+
+    it('uses a single browser context (no pre-flight session check)', async () => {
+      db.addSession(
+        'fast@example.com',
+        'us1',
+        'Acct',
+        JSON.stringify([{ name: 'sid', value: 'old' }]),
+      );
+      const contexts = { count: 0 };
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({ landedUrl: 'https://app.e-builder.net/da2/Home/index2.aspx', contexts });
+
+      const result: any = await SessionExec.run(['--session-id', '1', '--json']);
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(contexts.count, 1);
+      assert.deepStrictEqual(JSON.parse(db.getSessionById(1)!.session_cookies), [
+        { name: 'sid', value: 'fresh' },
+      ]);
+    });
+
+    it('reports SessionExpiredError when the target navigation lands on a login page', async () => {
+      db.addSession(
+        'expired@example.com',
+        'us1',
+        'Acct',
+        JSON.stringify([{ name: 'sid', value: 'old' }]),
+      );
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({
+          landedUrl: 'https://app.e-builder.net/Login/Login.aspx?ReturnUrl=%2fda2',
+        });
+
+      const result: any = await SessionExec.run(['--session-id', '1', '--json']);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.error.code, 'SessionExpiredError');
+      assert.strictEqual(result.error.reason, 'redirected_to_login');
+      assert.deepStrictEqual(JSON.parse(db.getSessionById(1)!.session_cookies), [
+        { name: 'sid', value: 'old' },
+      ]);
+    });
+
+    it('reports NetworkError (not session expiry) when e-Builder is unreachable', async () => {
+      db.addSession(
+        'sandboxed@example.com',
+        'us1',
+        'Acct',
+        JSON.stringify([{ name: 'sid', value: 'old' }]),
+      );
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({
+          landedUrl: 'about:blank',
+          gotoError: new Error('net::ERR_NAME_NOT_RESOLVED at https://app.e-builder.net/'),
+        });
+
+      const result: any = await SessionExec.run(['--session-id', '1', '--json']);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.error.code, 'NetworkError');
+      assert.match(result.error.message, /NOT invalidated/);
+      assert.doesNotMatch(result.error.message, /expired/i);
+      assert.strictEqual(db.getSessions().length, 1);
+    });
+
+    it('treats a positional local .js path as --script-file and navigates to Home', async () => {
+      db.addSession('script@example.com', 'us1', 'Acct', '[]');
+      const scriptPath = path.join(tmpDir, 'probe.js');
+      fs.writeFileSync(scriptPath, 'module.exports = () => document.title;\n');
+      const navigated: string[] = [];
+      const browser = execMockBrowser({
+        landedUrl: 'https://app.e-builder.net/da2/Home/index2.aspx',
+      });
+      const origCtx = browser.createBrowserContext;
+      browser.createBrowserContext = async () => {
+        const ctx = await origCtx();
+        const origPage = ctx.newPage;
+        ctx.newPage = async () => {
+          const p = await origPage();
+          p.goto = async (u: string) => {
+            navigated.push(u);
+          };
+          return p;
+        };
+        return ctx;
+      };
+      eb.BrowserManager.getInstance().getBrowser = async () => browser;
+
+      const result: any = await SessionExec.run([scriptPath, '--session-id', '1', '--json']);
+      assert.strictEqual(result.success, true);
+      assert.deepStrictEqual(navigated, ['https://app.e-builder.net/da2/Home/index2.aspx']);
+    });
+
+    it('accepts --file and --url aliases', async () => {
+      db.addSession('alias@example.com', 'us1', 'Acct', '[]');
+      const scriptPath = path.join(tmpDir, 'alias.js');
+      fs.writeFileSync(scriptPath, '() => 1');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({ landedUrl: 'https://app.e-builder.net/da2/Reports/index.aspx' });
+
+      const result: any = await SessionExec.run([
+        '--url',
+        '/da2/Reports/index.aspx',
+        '--file',
+        scriptPath,
+        '--session-id',
+        '1',
+        '--json',
+      ]);
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.url, 'https://app.e-builder.net/da2/Reports/index.aspx');
+    });
+
+    it('selects the session by --account substring', async () => {
+      db.addSession('mark@example.com', 'us3', 'Project Mark - Production', '[]');
+      db.addSession('mark@example.com', 'us3', 'Project Mark - UAT', '[]');
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        execMockBrowser({ landedUrl: 'https://app-us3.e-builder.net/da2/Home/index2.aspx' });
+
+      const uat: any = await SessionExec.run(['--account', 'uat', '--json']);
+      assert.strictEqual(uat.session.account, 'Project Mark - UAT');
+      const prod: any = await SessionExec.run(['-A', 'PROD', '--json']);
+      assert.strictEqual(prod.session.account, 'Project Mark - Production');
+
+      const missing: any = await SessionExec.run(['--account', 'sandbox', '--json']);
+      assert.strictEqual(missing.success, false);
+      assert.match(missing.error.message, /No sessions found matching account "sandbox"/);
+      assert.match(missing.error.message, /Project Mark - UAT/);
     });
   });
 });

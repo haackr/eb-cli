@@ -5,6 +5,8 @@ import { z } from 'zod';
 import * as eb from '../lib/eb-puppetmaster/index.js';
 import * as db from '../lib/db.js';
 import { refreshSessionIfNeeded } from '../lib/login-helper.js';
+import { STANDARD_PATHS } from './agent/guide.js';
+import * as pi from '../lib/eb-puppetmaster/process-instance.js';
 
 export default class McpCommand extends Command {
   static override description =
@@ -52,7 +54,9 @@ export default class McpCommand extends Command {
           .boolean()
           .optional()
           .default(false)
-          .describe('Whether to delete invalid sessions (defaults to false)'),
+          .describe(
+            'Delete sessions redirected to a login page (defaults to false). Network, timeout, and server errors never delete.',
+          ),
       },
       async ({ username, deleteInvalid }) => {
         let sessions: db.SessionRow[];
@@ -66,52 +70,55 @@ export default class McpCommand extends Command {
         for (const session of sessions) {
           const env = eb.getEnvironment(session.environment);
           const cookies = JSON.parse(session.session_cookies);
+          const base = {
+            id: session.id,
+            username: session.username,
+            environment: session.environment,
+            account: session.account,
+          };
+          let check: eb.SessionCheckResult;
           try {
-            const { isLoggedIn, newCookies } = await eb.isLoggedIn(env, true, cookies);
-            if (isLoggedIn) {
-              db.updateSessionById(
-                session.id,
-                session.username,
-                session.environment,
-                session.account,
-                JSON.stringify(newCookies),
-              );
-              results.push({
-                id: session.id,
-                username: session.username,
-                environment: session.environment,
-                account: session.account,
-                valid: true,
-                refreshed: true,
-                deleted: false,
-              });
-            } else {
-              if (deleteInvalid) {
-                db.deleteSessionById(session.id);
-              }
-              results.push({
-                id: session.id,
-                username: session.username,
-                environment: session.environment,
-                account: session.account,
-                valid: false,
-                refreshed: false,
-                deleted: Boolean(deleteInvalid),
-                error: 'Session invalid or cookies expired',
-              });
-            }
+            check = await eb.isLoggedIn(env, true, cookies);
           } catch (err: any) {
-            results.push({
-              id: session.id,
-              username: session.username,
-              environment: session.environment,
-              account: session.account,
-              valid: false,
-              refreshed: false,
-              deleted: false,
-              error: err.message,
-            });
+            check = {
+              isLoggedIn: false,
+              reason: eb.classifyNavigationError(err) ?? 'unknown',
+              errorMessage: err?.message,
+              newCookies: [],
+            };
           }
+
+          if (check.isLoggedIn) {
+            db.updateSessionById(
+              session.id,
+              session.username,
+              session.environment,
+              session.account,
+              JSON.stringify(check.newCookies),
+            );
+            results.push({
+              ...base,
+              valid: true,
+              refreshed: true,
+              deleted: false,
+              reason: check.reason,
+            });
+            continue;
+          }
+
+          // Only a real redirect to a login page proves the cookies are dead.
+          const shouldDelete = Boolean(deleteInvalid) && check.reason === 'redirected_to_login';
+          if (shouldDelete) {
+            db.deleteSessionById(session.id);
+          }
+          results.push({
+            ...base,
+            valid: false,
+            refreshed: false,
+            deleted: shouldDelete,
+            reason: check.reason,
+            error: eb.sessionCheckErrorFor(check, `https://${env}.${eb.baseurl}`).message,
+          });
         }
 
         await eb.BrowserManager.getInstance().closeBrowser();
@@ -129,19 +136,23 @@ export default class McpCommand extends Command {
         url: z
           .string()
           .optional()
-          .describe('e-Builder relative path (e.g. /da2/Processes/ProcessesView.aspx) or full URL'),
+          .describe('e-Builder relative path (e.g. /da2/Processes/ProcessesMain.aspx) or full URL'),
         sessionId: z.number().optional().describe('Specific session ID to use'),
         username: z.string().optional().describe('Username to resolve session for'),
+        account: z
+          .string()
+          .optional()
+          .describe('Select session by account name (case-insensitive substring, e.g. "prod")'),
         waitForSelector: z
           .string()
           .optional()
           .describe('CSS selector to wait for before inspecting'),
         screenshot: z.boolean().optional().describe('Capture screenshot to temporary file'),
       },
-      async ({ url, sessionId, username, waitForSelector, screenshot }) => {
-        const session = resolveMcpSession(sessionId, username);
+      async ({ url, sessionId, username, account, waitForSelector, screenshot }) => {
+        const session = resolveMcpSession(sessionId, username, account);
         const env = eb.getEnvironment(session.environment);
-        const cookies = await getMcpSessionCookies(session);
+        const cookies = getMcpStoredCookies(session);
 
         let screenshotPath: string | undefined;
         if (screenshot) {
@@ -201,12 +212,29 @@ export default class McpCommand extends Command {
       'Execute a DOM JavaScript snippet or Puppeteer script inside an authenticated e-Builder session. In DOM mode, has access to the in-browser "eb" helper (eb.findField, eb.getRadComboBox, eb.setRadComboBox, eb.getTable, eb.getContentDocument).',
       {
         url: z.string().optional().describe('e-Builder relative path or full URL'),
-        eval: z.string().optional().describe('JavaScript snippet to evaluate'),
-        mode: z.enum(['dom', 'puppeteer']).optional().default('dom').describe('Execution mode'),
+        eval: z
+          .string()
+          .optional()
+          .describe(
+            'JavaScript to evaluate. DOM mode: `(arg, eb) => ...`. Puppeteer mode: `async ({ page, arg, eb, fs }) => ...`. `export default` / `module.exports =` wrappers are accepted.',
+          ),
+        mode: z
+          .enum(['dom', 'puppeteer'])
+          .optional()
+          .describe('Execution mode (auto-detected from the script when omitted)'),
         arg: z.unknown().optional().describe('Argument passed to the script function'),
         waitForSelector: z.string().optional().describe('CSS selector to wait for'),
         sessionId: z.number().optional().describe('Specific session ID to use'),
         username: z.string().optional().describe('Username to resolve session for'),
+        account: z
+          .string()
+          .optional()
+          .describe('Select session by account name (case-insensitive substring, e.g. "prod")'),
+        dialogPolicy: z
+          .enum(['dismiss', 'accept', 'manual'])
+          .optional()
+          .default('dismiss')
+          .describe('How to answer alert/confirm/prompt dialogs'),
         screenshot: z.string().optional().describe('Save full-page screenshot to this path'),
       },
       async ({
@@ -217,11 +245,15 @@ export default class McpCommand extends Command {
         waitForSelector,
         sessionId,
         username,
+        account,
+        dialogPolicy,
         screenshot,
       }) => {
-        const session = resolveMcpSession(sessionId, username);
+        const session = resolveMcpSession(sessionId, username, account);
         const env = eb.getEnvironment(session.environment);
-        const cookies = await getMcpSessionCookies(session);
+        const cookies = getMcpStoredCookies(session);
+        const resolvedMode: eb.ExecuteInSessionMode =
+          mode ?? (scriptCode && eb.looksLikePuppeteerScript(scriptCode) ? 'puppeteer' : 'dom');
 
         try {
           const result = await eb.executeInSession({
@@ -231,8 +263,9 @@ export default class McpCommand extends Command {
             url,
             waitForSelector,
             script: scriptCode,
-            mode,
+            mode: resolvedMode,
             arg,
+            dialogPolicy,
             screenshotPath: screenshot,
           });
 
@@ -257,6 +290,8 @@ export default class McpCommand extends Command {
                     title: result.title,
                     frameUrl: result.frameUrl,
                     screenshotPath: result.screenshotPath,
+                    mode: resolvedMode,
+                    dialogs: result.dialogs,
                     result: result.result,
                   },
                   null,
@@ -480,7 +515,9 @@ export default class McpCommand extends Command {
           const payload = {
             success: result.success,
             reportName: config.name,
-            dataSource: config.dataSource,
+            reportType: `${config.reportType.text} / ${config.reportSubType.text}`,
+            reportId: result.reportId,
+            warnings: [...(config.warnings ?? []), ...result.warnings],
             fromSession: { id: fromSession.id, account: fromSession.account },
             toSession: { id: toSession.id, account: toSession.account },
             url: result.url,
@@ -495,19 +532,209 @@ export default class McpCommand extends Command {
       },
     );
 
+    const sessionSchema = {
+      sessionId: z.number().optional().describe('Specific session ID to use'),
+      username: z.string().optional().describe('Username to resolve session for'),
+      account: z
+        .string()
+        .optional()
+        .describe('Select session by account name (substring, e.g. "uat")'),
+    };
+    const fieldsSchema = z
+      .record(
+        z.string(),
+        z.union([z.string(), z.number(), z.boolean(), z.array(z.string()), z.null()]),
+      )
+      .optional()
+      .describe(
+        'Fields to set: {"Label": value}. Labels are case-insensitive; DataFieldID GUIDs also work.',
+      );
+    const instanceSchema = z
+      .string()
+      .describe('InstanceID GUID, or an open instance name like "RFI - 12" (with project)');
+    /** Runs a process-instance operation with the resolved session and returns JSON text. */
+    const runProcessTool = async (
+      args: {
+        sessionId?: number | undefined;
+        username?: string | undefined;
+        account?: string | undefined;
+        project?: string | undefined;
+        instance?: string | undefined;
+      },
+      fn: (ctx: { env: eb.Environment; cookies: any[]; instanceId?: string }) => Promise<unknown>,
+    ) => {
+      const session = resolveMcpSession(args.sessionId, args.username, args.account);
+      const env = eb.getEnvironment(session.environment);
+      const cookies = getMcpStoredCookies(session);
+      try {
+        let instanceId: string | undefined;
+        if (args.instance) {
+          const { resolveInstanceId } = await import('../lib/process-command-utils.js');
+          instanceId = await resolveInstanceId({ env, cookies }, args.instance, args.project);
+        }
+        const result = await fn({ env, cookies, ...(instanceId ? { instanceId } : {}) });
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } finally {
+        await eb.BrowserManager.getInstance().closeBrowser();
+      }
+    };
+
+    server.tool(
+      'eb_process_startable',
+      'List the processes the user can start (initiate) in a project.',
+      { ...sessionSchema, project: z.string().describe('Project name or PortalID') },
+      async (a) =>
+        runProcessTool(a, (c) => pi.listStartableProcesses({ ...c, project: a.project })),
+    );
+
+    server.tool(
+      'eb_process_instances',
+      "List a project's open process instances (name, subject, step, status, dates).",
+      {
+        ...sessionSchema,
+        project: z.string().describe('Project name or PortalID'),
+        process: z.string().optional().describe('Filter by process prefix or type'),
+        search: z.string().optional().describe('Text filter'),
+      },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.listProcessInstances({
+            ...c,
+            project: a.project,
+            process: a.process,
+            search: a.search,
+          }),
+        ),
+    );
+
+    server.tool(
+      'eb_process_view',
+      'Show a process instance: current step, status, the workflow actions available to the user, ownership state, and every field (label, type, value, editable, options).',
+      {
+        ...sessionSchema,
+        instance: instanceSchema,
+        project: z.string().optional().describe('Project (needed when instance is a name)'),
+      },
+      async (a) =>
+        runProcessTool(a, (c) => pi.getProcessInstance({ ...c, instanceId: c.instanceId! })),
+    );
+
+    server.tool(
+      'eb_process_start',
+      'Start (initiate) a process in a project, filling start-form fields, then Submit (or save a draft). Live action: creates a real instance and may notify the next actors.',
+      {
+        ...sessionSchema,
+        project: z.string().describe('Project name or PortalID'),
+        process: z.string().describe('Process name, prefix, or ProcessID'),
+        subject: z
+          .string()
+          .optional()
+          .describe('Subject (only when the workflow allows a manual subject)'),
+        fields: fieldsSchema,
+        draft: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe('Save as a draft instead of submitting'),
+        dryRun: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe('Validate and fill without submitting'),
+      },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.startProcessInstance({
+            ...c,
+            project: a.project,
+            process: a.process,
+            subject: a.subject,
+            fields: a.fields ?? {},
+            draft: a.draft,
+            dryRun: a.dryRun,
+          }),
+        ),
+    );
+
+    server.tool(
+      'eb_process_set_fields',
+      'Set fields on a process instance and save (drafts are saved as drafts). Only fields editable at the current step can be set. If ownership of a role-assigned step is pending, pass acceptOwnership: true.',
+      {
+        ...sessionSchema,
+        instance: instanceSchema,
+        project: z.string().optional(),
+        fields: fieldsSchema,
+        acceptOwnership: z.boolean().optional().default(false),
+        dryRun: z.boolean().optional().default(false),
+      },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.setProcessInstanceFields({
+            ...c,
+            instanceId: c.instanceId!,
+            fields: a.fields ?? {},
+            acceptOwnership: a.acceptOwnership,
+            dryRun: a.dryRun,
+          }),
+        ),
+    );
+
+    server.tool(
+      'eb_process_action',
+      'Take a workflow action (e.g. Approve, Revise, Close) on a process instance, optionally with a comment and field updates. Live action: advances the workflow and may notify others. Use eb_process_view to list available actions first.',
+      {
+        ...sessionSchema,
+        instance: instanceSchema,
+        project: z.string().optional(),
+        action: z.string().describe('Action name (case-insensitive) or action ID'),
+        comment: z.string().optional().describe('Comment (required by some actions)'),
+        privateComment: z.boolean().optional().default(false),
+        fields: fieldsSchema,
+        acceptOwnership: z.boolean().optional().default(false),
+      },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.takeProcessAction({
+            ...c,
+            instanceId: c.instanceId!,
+            action: a.action,
+            comment: a.comment,
+            privateComment: a.privateComment,
+            fields: a.fields ?? {},
+            acceptOwnership: a.acceptOwnership,
+          }),
+        ),
+    );
+
+    server.tool(
+      'eb_process_accept_ownership',
+      "Accept ownership of an instance's current role-assigned step (the user becomes responsible for completing it).",
+      { ...sessionSchema, instance: instanceSchema, project: z.string().optional() },
+      async (a) =>
+        runProcessTool(a, (c) => pi.acceptProcessOwnership({ ...c, instanceId: c.instanceId! })),
+    );
+
+    server.tool(
+      'eb_process_submit_draft',
+      'Submit a draft process instance (optionally setting fields first).',
+      { ...sessionSchema, instance: z.string().describe('Draft InstanceID'), fields: fieldsSchema },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.submitProcessDraft({ ...c, instanceId: c.instanceId!, fields: a.fields ?? {} }),
+        ),
+    );
+
     server.tool(
       'eb_agent_guide',
       'Get standard e-Builder URL routing rules, in-browser eb helper documentation, and safety best practices.',
       {},
       async () => {
         const guide = {
-          standardPaths: {
-            home: '/da2/Home/index2.aspx',
-            processesView: '/da2/Processes/ProcessesView.aspx',
-            processTypesView: '/da2/Setup/Processes/ProcessTypesView.aspx',
-            importProcesses: '/da2/Processes/ImportProcesses/ImportProcesses.aspx',
-            manageUsers: '/da2/Users/ManageUsers.aspx',
-            apiLogs: '/da2/ApiLogs/ApiLogs.aspx',
+          standardPaths: STANDARD_PATHS,
+          scriptSyntax: {
+            dom: '(arg, eb) => ... or a bare expression',
+            puppeteer:
+              'async ({ page, browser, context, env, origin, url, arg, args, fs, path, os, eb, settle, inspect }) => ... (no export default / module.exports needed)',
           },
           browserHelperMethods: {
             'eb.getContentDocument()': 'Returns #contentFrame document or top document',
@@ -516,6 +743,20 @@ export default class McpCommand extends Command {
             'eb.setRadComboBox(idOrName, valueOrText)':
               'Selects RadComboBox item and fires change events',
             'eb.getTable(selectorOrId, maxRows)': 'Scrapes table into { headers, rowCount, rows }',
+            'eb.buildFormParams(formOrSelector?, overrides?, eventTarget?, eventArg?)':
+              'Serializes ASP.NET form (__VIEWSTATE etc.) to URLSearchParams',
+            'eb.postWebForm(url?, formOrSelector?, overrides?, eventTarget?, eventArg?)':
+              'fetch() postback resolving { url, status, html }',
+            'eb.getWorkflowData(processId, workflowId, version?)':
+              'Returns { xml: "<ebWorkflow>…", isActive } (version 3 = published, 1 = draft)',
+            'eb.getLayoutXml(processId, layoutId)': 'Returns page layout <ebLayout> XML',
+            'eb.exportReportCsv(reportId)': 'Returns full custom report CSV',
+          },
+          errorCodes: {
+            SessionExpiredError: 'Redirected to login: user must re-authenticate.',
+            NetworkError: 'e-Builder unreachable (often a sandbox). Session is still valid.',
+            NavigationTimeoutError: 'Timed out. Retry; session still valid.',
+            ServerError: 'HTTP 5xx. Retry later; session still valid.',
           },
           safetyGuardrails: [
             'Read-only by default in live environments.',
@@ -534,32 +775,49 @@ export default class McpCommand extends Command {
   }
 }
 
-function resolveMcpSession(sessionId?: number, username?: string): db.SessionRow {
+function resolveMcpSession(sessionId?: number, username?: string, account?: string): db.SessionRow {
   if (sessionId) {
     const s = db.getSessionById(sessionId) as db.SessionRow;
     if (!s) throw new Error(`Session with ID ${sessionId} not found.`);
     return s;
   }
-  if (username) {
-    const sessions = db.getSessionsByUsername(username) as db.SessionRow[];
-    if (sessions.length === 0) throw new Error(`No sessions found for username ${username}.`);
-    return [...sessions].sort((a, b) => b.id - a.id)[0]!;
-  }
-  const allSessions = db.getSessions() as db.SessionRow[];
-  if (allSessions.length === 0) {
+  let sessions = (
+    username ? db.getSessionsByUsername(username) : db.getSessions()
+  ) as db.SessionRow[];
+  if (username && sessions.length === 0)
+    throw new Error(`No sessions found for username ${username}.`);
+  if (sessions.length === 0) {
     throw new Error(
       "No active e-Builder sessions found in eb-cli. Please run 'eb session import' or 'eb login' first.",
     );
   }
-  return [...allSessions].sort((a, b) => b.id - a.id)[0]!;
+  if (account) {
+    const needle = account.trim().toLowerCase();
+    const exact = sessions.filter((s) => (s.account ?? '').trim().toLowerCase() === needle);
+    const partial = sessions.filter((s) => (s.account ?? '').toLowerCase().includes(needle));
+    const matches = exact.length > 0 ? exact : partial;
+    if (matches.length === 0) {
+      throw new Error(
+        `No sessions found matching account "${account}". Available: ${sessions
+          .map((s) => `"${s.account}" (id ${s.id})`)
+          .join(', ')}.`,
+      );
+    }
+    sessions = matches;
+  }
+  return [...sessions].sort((a, b) => b.id - a.id)[0]!;
+}
+
+/** Stored cookies without a pre-flight check; executeInSession verifies auth on navigation. */
+function getMcpStoredCookies(session: db.SessionRow): any[] {
+  return JSON.parse(session.session_cookies || '[]');
 }
 
 async function getMcpSessionCookies(session: db.SessionRow): Promise<any[]> {
-  const refreshed = await refreshSessionIfNeeded(session.id, true);
-  if (!refreshed) {
-    throw new Error(
-      `Session ${session.id} (${session.username}) has expired. Please re-authenticate using 'eb login' or 'eb session import'.`,
-    );
+  const check = await refreshSessionIfNeeded(session.id, true);
+  if (!check.isLoggedIn) {
+    const origin = `https://${eb.getEnvironment(session.environment)}.${eb.baseurl}`;
+    throw eb.sessionCheckErrorFor(check, origin);
   }
   const updated = db.getSessionById(session.id) as db.SessionRow;
   return JSON.parse(updated.session_cookies);

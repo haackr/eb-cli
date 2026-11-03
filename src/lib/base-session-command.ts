@@ -20,6 +20,11 @@ export abstract class BaseSessionCommand extends Command {
       char: 'u',
       description: 'Username to use session for',
     }),
+    account: Flags.string({
+      char: 'A',
+      description:
+        'Select session by account name (case-insensitive substring, e.g. "prod", "uat", or "Acme - Production")',
+    }),
     'show-browser': Flags.boolean({
       char: 's',
       description: 'Show browser window',
@@ -51,6 +56,7 @@ export abstract class BaseSessionCommand extends Command {
   protected async getSession(flags: {
     'session-id'?: number | undefined;
     username?: string | undefined;
+    account?: string | undefined;
     'show-browser'?: boolean | undefined;
   }): Promise<SessionRow> {
     let session: SessionRow | undefined;
@@ -60,18 +66,14 @@ export abstract class BaseSessionCommand extends Command {
       if (!session) {
         this.error(`Session with ID ${flags['session-id']} not found.`);
       }
-    } else if (flags.username) {
-      const sessions = db.getSessionsByUsername(flags.username) as SessionRow[];
-      if (sessions.length === 0) {
-        this.error(`No sessions found for username ${flags.username}.`);
-      } else if (sessions.length === 1) {
+    } else if (flags.username || flags.account) {
+      const sessions = this.filterSessions(flags.username, flags.account);
+      if (sessions.length === 1) {
         session = sessions[0];
+      } else if (!this.isInteractive()) {
+        session = [...sessions].sort((a, b) => b.id - a.id)[0];
       } else {
-        if (!this.isInteractive()) {
-          session = [...sessions].sort((a, b) => b.id - a.id)[0];
-        } else {
-          session = await this.selectSession(sessions);
-        }
+        session = await this.selectSession(sessions);
       }
     } else {
       session = await this.getOrCreateSession(flags['show-browser']);
@@ -82,6 +84,38 @@ export abstract class BaseSessionCommand extends Command {
     }
 
     return session;
+  }
+
+  /**
+   * Filters stored sessions by username (exact) and/or account (case-insensitive substring;
+   * exact account-name matches win over substring matches). Errors with the available
+   * accounts when nothing matches.
+   */
+  private filterSessions(username?: string, account?: string): SessionRow[] {
+    let sessions = (
+      username ? db.getSessionsByUsername(username) : db.getSessions()
+    ) as SessionRow[];
+    if (username && sessions.length === 0) {
+      this.error(`No sessions found for username ${username}.`);
+    }
+
+    if (account) {
+      const needle = account.trim().toLowerCase();
+      const exact = sessions.filter((s) => (s.account ?? '').trim().toLowerCase() === needle);
+      const partial = sessions.filter((s) => (s.account ?? '').toLowerCase().includes(needle));
+      const matches = exact.length > 0 ? exact : partial;
+      if (matches.length === 0) {
+        const available = [...new Set(sessions.map((s) => `"${s.account}" (id ${s.id})`))];
+        this.error(
+          `No sessions found matching account "${account}"${
+            username ? ` for username ${username}` : ''
+          }. Available: ${available.length ? available.join(', ') : 'none'}.`,
+        );
+      }
+      sessions = matches;
+    }
+
+    return sessions;
   }
 
   /**
@@ -139,47 +173,107 @@ export abstract class BaseSessionCommand extends Command {
 
   /**
    * Get session cookies, refreshing the session if needed.
-   * Throws an error if the session has expired and cannot be refreshed.
+   *
+   * Throws a typed error when the session cannot be used. Only an actual redirect to a login
+   * page is reported as an expired session; network, timeout, and server errors are reported
+   * as such (with the stored cookies left untouched) so they are not mistaken for logouts.
    *
    * @param sessionId - The session ID to get cookies for
    * @param headless - Whether to run the refresh in headless mode (default: true)
+   * @param options.skipRefresh - Return stored cookies without a pre-flight browser check.
+   *   Use when the caller verifies authentication itself (e.g. `eb exec`).
    * @returns Parsed session cookies array
    */
-  protected async getSessionCookies(sessionId: number, headless: boolean = true): Promise<any[]> {
-    if (!(await refreshSessionIfNeeded(sessionId, headless))) {
-      // Check if we have an autonomous credential reference (1password, bitwarden, etc.)
-      const credRef = db.getCredentialRef(sessionId);
-      if (credRef) {
-        const session = db.getSessionById(sessionId) as SessionRow | undefined;
-        if (session) {
-          try {
-            const { CredentialResolver } = await import('./credentials/resolver.js');
-            const creds = await CredentialResolver.resolve({
-              provider: credRef.provider as any,
-              itemRef: credRef.item_ref,
-              vault: credRef.vault ?? undefined,
-            });
-            const env = eb.getEnvironment(session.environment);
-            const newCookies = await this.performLogin(
-              env,
-              headless,
-              creds.username || session.username,
-              creds.password,
-              creds.account || session.account,
-            );
-            if (newCookies && newCookies.length > 0) {
-              db.updateSessionCookies(sessionId, JSON.stringify(newCookies));
-              return newCookies;
-            }
-          } catch {
-            // Fall through to error
-          }
-        }
+  protected async getSessionCookies(
+    sessionId: number,
+    headless: boolean = true,
+    options: { skipRefresh?: boolean } = {},
+  ): Promise<any[]> {
+    if (options.skipRefresh) {
+      const stored = db.getSessionById(sessionId) as SessionRow | undefined;
+      if (!stored?.session_cookies) {
+        this.error(
+          `No cookies found for session ${sessionId}. Please log in again using 'eb login'.`,
+        );
       }
-      this.error("Session has expired. Please log in again using 'eb login'.");
+      return JSON.parse(stored.session_cookies);
     }
-    const session = db.getSessionById(sessionId) as SessionRow;
-    return JSON.parse(session.session_cookies);
+
+    const check = await refreshSessionIfNeeded(sessionId, headless);
+    if (check.isLoggedIn) {
+      const session = db.getSessionById(sessionId) as SessionRow;
+      return JSON.parse(session.session_cookies);
+    }
+
+    if (check.reason === 'redirected_to_login' || check.reason === 'unknown') {
+      const reloggedCookies = await this.reloginWithCredentialProvider(sessionId, headless);
+      if (reloggedCookies) return reloggedCookies;
+    }
+
+    const session = db.getSessionById(sessionId) as SessionRow | undefined;
+    const origin = session
+      ? `https://${eb.getEnvironment(session.environment)}.${eb.baseurl}`
+      : 'e-Builder';
+    const err = eb.sessionCheckErrorFor(check, origin);
+    this.error(err.message, { code: err.code });
+  }
+
+  /**
+   * If the session has an autonomous credential reference (1Password, Bitwarden, etc.),
+   * performs a fresh login, persists the new cookies, and returns them. Returns null otherwise.
+   */
+  protected async reloginWithCredentialProvider(
+    sessionId: number,
+    headless: boolean = true,
+  ): Promise<any[] | null> {
+    const credRef = db.getCredentialRef(sessionId);
+    if (!credRef) return null;
+    const session = db.getSessionById(sessionId) as SessionRow | undefined;
+    if (!session) return null;
+    try {
+      const { CredentialResolver } = await import('./credentials/resolver.js');
+      const creds = await CredentialResolver.resolve({
+        provider: credRef.provider as any,
+        itemRef: credRef.item_ref,
+        vault: credRef.vault ?? undefined,
+      });
+      const env = eb.getEnvironment(session.environment);
+      const newCookies = await this.performLogin(
+        env,
+        headless,
+        creds.username || session.username,
+        creds.password,
+        creds.account || session.account,
+      );
+      if (newCookies && newCookies.length > 0) {
+        db.updateSessionCookies(sessionId, JSON.stringify(newCookies));
+        return newCookies;
+      }
+    } catch {
+      // Fall through: caller reports the original failure
+    }
+    return null;
+  }
+
+  /**
+   * Runs `fn` with the session's stored cookies (no pre-flight browser check; callers verify
+   * authentication on their own navigation). On a real login redirect it re-authenticates via
+   * the session's credential provider, if any, and retries once.
+   */
+  protected async withSessionCookies<T>(
+    sessionId: number,
+    headless: boolean,
+    fn: (cookies: any[]) => Promise<T>,
+  ): Promise<T> {
+    const cookies = await this.getSessionCookies(sessionId, headless, { skipRefresh: true });
+    try {
+      return await fn(cookies);
+    } catch (err: any) {
+      if (err?.reason !== 'redirected_to_login') throw err;
+      const relogged = await this.reloginWithCredentialProvider(sessionId, headless);
+      if (!relogged) throw err;
+      return await fn(relogged);
+    }
   }
 
   /**

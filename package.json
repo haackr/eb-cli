@@ -1,6 +1,6 @@
 {
   "name": "eb-cli",
-  "version": "0.1.0-alpha.44",
+  "version": "0.1.0-alpha.45",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -41,6 +41,9 @@
       "identifier": "com.avicado.eb-cli"
     },
     "topics": {
+      "daemon": {
+        "description": "Manage the optional warm headless browser shared by eb commands."
+      },
       "budgetitems": {
         "description": "Change or delete budget items."
       },
