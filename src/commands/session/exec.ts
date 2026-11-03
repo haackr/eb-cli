@@ -23,7 +23,7 @@ export default class SessionExec extends BaseSessionCommand {
   static override description =
     'Navigate to an e-Builder path or URL using a stored session (headless by default) and evaluate a DOM or Puppeteer script. Automatically resolves environment URLs, verifies the session on the target navigation, and saves refreshed cookies. Errors report a typed code (SessionExpiredError, NetworkError, NavigationTimeoutError) so network problems are not mistaken for logouts.';
   static override examples = [
-    '<%= config.bin %> <%= command.id %> /da2/Processes/ProcessesView.aspx --eval "document.title" --json',
+    '<%= config.bin %> <%= command.id %> /da2/Processes/ProcessesMain.aspx --eval "document.title" --json',
     '<%= config.bin %> <%= command.id %> --account prod --url /da2/Home/index2.aspx --file ./script.js --json',
     '<%= config.bin %> <%= command.id %> ./script.js --account uat --json',
     '<%= config.bin %> <%= command.id %> /da2/Setup/Processes/ProcessTypesView.aspx --script-file extract-types.js --json',
@@ -35,7 +35,7 @@ export default class SessionExec extends BaseSessionCommand {
   static override args = {
     url: Args.string({
       description:
-        'e-Builder relative path (e.g. /da2/Processes/ProcessesView.aspx) or full URL (defaults to Home)',
+        'e-Builder relative path (e.g. /da2/Processes/ProcessesMain.aspx) or full URL (defaults to Home)',
       required: false,
     }),
   };

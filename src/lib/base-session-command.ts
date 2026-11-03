@@ -256,6 +256,27 @@ export abstract class BaseSessionCommand extends Command {
   }
 
   /**
+   * Runs `fn` with the session's stored cookies (no pre-flight browser check; callers verify
+   * authentication on their own navigation). On a real login redirect it re-authenticates via
+   * the session's credential provider, if any, and retries once.
+   */
+  protected async withSessionCookies<T>(
+    sessionId: number,
+    headless: boolean,
+    fn: (cookies: any[]) => Promise<T>,
+  ): Promise<T> {
+    const cookies = await this.getSessionCookies(sessionId, headless, { skipRefresh: true });
+    try {
+      return await fn(cookies);
+    } catch (err: any) {
+      if (err?.reason !== 'redirected_to_login') throw err;
+      const relogged = await this.reloginWithCredentialProvider(sessionId, headless);
+      if (!relogged) throw err;
+      return await fn(relogged);
+    }
+  }
+
+  /**
    * Refresh session cookies periodically to maintain authentication.
    * Should be called every N operations in long-running commands.
    *

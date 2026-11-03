@@ -11,6 +11,7 @@
 import * as http from 'http';
 import type { AddressInfo } from 'net';
 import { randomUUID } from 'crypto';
+import { MockProcessPages } from './mock-ebuilder-processes.js';
 
 const P = 'ctl00$ctl00$ContentPlaceHolder1$contentSection$';
 const I = 'ctl00_ctl00_ContentPlaceHolder1_contentSection_';
@@ -402,6 +403,8 @@ export class MockEBuilder {
   server!: http.Server;
   origin = '';
   state: WizardState = freshState();
+  /** Process-instance pages (start / view / set / actions). */
+  processPages = new MockProcessPages();
   reports: SavedReport[] = [];
   /** Session-binding quirk can be disabled to compare behaviour. */
   saveErrors = 0;
@@ -440,6 +443,7 @@ export class MockEBuilder {
     const target = b.get('__EVENTTARGET') ?? '';
     const path = url.pathname;
     const s = this.state;
+    if (this.processPages.handle(req, res, raw)) return;
 
     if (path === '/da2/Reports/index.aspx') {
       if (req.method === 'POST' && /btnAddStandardReport/.test(target)) {

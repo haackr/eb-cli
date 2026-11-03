@@ -7,7 +7,10 @@ import { Command, Flags } from '@oclif/core';
  */
 export const STANDARD_PATHS = {
   home: '/da2/Home/index2.aspx',
-  processesView: '/da2/Processes/ProcessesView.aspx',
+  processesMain: '/da2/Processes/ProcessesMain.aspx (In My Court / Initiated by Me)',
+  projectProcesses: '/da2/Processes/ProjectProcesses.aspx?PortalID={GUID}',
+  startProcess: '/da2/Processes/StartProcess.aspx?PortalID={GUID}&ProcessID={GUID}',
+  instanceDetails: '/da2/Processes/InstanceDetails.aspx?InstanceID={GUID}',
   manageProcesses: '/da2/Setup/Admin/Processes/ManageProcesses.aspx',
   viewProcess: '/da2/Setup/Admin/Processes/ViewProcess.aspx?ProcessID={GUID}',
   manageDataFields: '/da2/Setup/Admin/Processes/ManageDataFields.aspx?ProcessID={GUID}',
@@ -60,7 +63,7 @@ export default class AgentGuide extends Command {
           command: 'eb session exec <relative-path> --inspect --json',
           description:
             'Extracts a clean, token-efficient JSON AST of all form inputs, RadComboBoxes, buttons, tables, alerts, and breadcrumbs. Always run this before submitting forms or mutating state.',
-          example: 'eb session exec /da2/Processes/ProcessesView.aspx --inspect --json',
+          example: 'eb session exec /da2/Processes/ProcessesMain.aspx --inspect --json',
         },
         domEvaluation: {
           command: 'eb session exec <relative-path> --eval "<code>" --json',
@@ -79,6 +82,31 @@ export default class AgentGuide extends Command {
           description:
             'Select a session by account name rather than numeric ID: --account prod, --account uat, or -A "Acme - Production" (case-insensitive substring). --session-id <n> and --username <u> also work. With none, the newest session is used non-interactively.',
           example: 'eb session exec --account uat ./script.js --json',
+        },
+        processUse: {
+          description:
+            'Start processes, take workflow actions, and set fields with dedicated commands (no scripting needed). All accept --json; instances can be given by InstanceID or by name ("RFI - 12") with --project.',
+          commands: {
+            'eb process startable -P <project>': 'Processes the user can start in the project.',
+            'eb process instances -P <project> [--process RFI] [--search text]':
+              'Open instances with step/status.',
+            'eb process view <instance> [-P <project>]':
+              'Current step, status, available actions, ownership state, and every field (label, type, value, editable, options).',
+            'eb process start <process> -P <project> [--subject s] -F "Label=value" ... [--draft] [--dry-run]':
+              'Initiate a process. Some workflows generate the subject; omit --subject for those.',
+            'eb process set <instance> -F "Label=value" ... [--accept-ownership] [--dry-run]':
+              'Edit fields and save.',
+            'eb process action <instance> --action <name> [--comment c] [-F ...]':
+              'Take a workflow action. Some actions require --comment.',
+            'eb process accept <instance>': 'Accept ownership of a role-assigned step.',
+            'eb process submit <draft-id> [-F ...]': 'Submit a draft.',
+          },
+          rules: [
+            'Always `eb process view` first: it lists the exact action names and which fields are editable at this step.',
+            'start and action are live: they create/advance real instances and can notify other users. Use --dry-run (start/set) to validate first.',
+            'If a step is assigned to a role and nobody accepted it, e-Builder silently discards field edits; the CLI refuses unless --accept-ownership is passed. Only accept when the user intends to take responsibility for the step.',
+            'Never retry `process start` after an ambiguous error without checking `eb process instances` first (avoid duplicates).',
+          ],
         },
         browserDaemon: {
           description:
@@ -166,11 +194,22 @@ async ({ page, arg, eb, fs }) => {
 }
 \`\`\`
 \`\`\`bash
-eb session exec --account prod --url /da2/Processes/ProcessesView.aspx --file script.js --json
+eb session exec --account prod --url /da2/Processes/ProcessesMain.aspx --file script.js --json
 \`\`\`
 Puppeteer mode is auto-detected; \`--puppeteer\` / \`--no-puppeteer\` force it. Dialogs are dismissed by default (\`--dialog-policy accept|dismiss|manual\`).
 
 For loops of many commands, run \`eb daemon start\` first to reuse a warm headless browser.
+
+### Working with processes (start, act, set fields)
+\`\`\`bash
+eb process startable -P "Project X" --json                      # what can be started here
+eb process start RFI -P "Project X" -F "Question=Door spec?" --json
+eb process instances -P "Project X" --process RFI --json        # open instances
+eb process view "RFI - 12" -P "Project X" --json                 # actions + editable fields
+eb process set "RFI - 12" -P "Project X" -F "Drawing Number=A-101" --json
+eb process action "RFI - 12" -P "Project X" --action Revise --comment "Need drawing" --json
+\`\`\`
+Starting and acting are live operations that notify other users. View the instance first to get exact action names and editable fields. If a role-assigned step has not been accepted, field edits need \`--accept-ownership\`.
 
 ## 2. In-Browser "eb" Helper Reference
 

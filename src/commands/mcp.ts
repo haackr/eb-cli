@@ -6,6 +6,7 @@ import * as eb from '../lib/eb-puppetmaster/index.js';
 import * as db from '../lib/db.js';
 import { refreshSessionIfNeeded } from '../lib/login-helper.js';
 import { STANDARD_PATHS } from './agent/guide.js';
+import * as pi from '../lib/eb-puppetmaster/process-instance.js';
 
 export default class McpCommand extends Command {
   static override description =
@@ -135,7 +136,7 @@ export default class McpCommand extends Command {
         url: z
           .string()
           .optional()
-          .describe('e-Builder relative path (e.g. /da2/Processes/ProcessesView.aspx) or full URL'),
+          .describe('e-Builder relative path (e.g. /da2/Processes/ProcessesMain.aspx) or full URL'),
         sessionId: z.number().optional().describe('Specific session ID to use'),
         username: z.string().optional().describe('Username to resolve session for'),
         account: z
@@ -529,6 +530,198 @@ export default class McpCommand extends Command {
           await eb.BrowserManager.getInstance().closeBrowser();
         }
       },
+    );
+
+    const sessionSchema = {
+      sessionId: z.number().optional().describe('Specific session ID to use'),
+      username: z.string().optional().describe('Username to resolve session for'),
+      account: z
+        .string()
+        .optional()
+        .describe('Select session by account name (substring, e.g. "uat")'),
+    };
+    const fieldsSchema = z
+      .record(
+        z.string(),
+        z.union([z.string(), z.number(), z.boolean(), z.array(z.string()), z.null()]),
+      )
+      .optional()
+      .describe(
+        'Fields to set: {"Label": value}. Labels are case-insensitive; DataFieldID GUIDs also work.',
+      );
+    const instanceSchema = z
+      .string()
+      .describe('InstanceID GUID, or an open instance name like "RFI - 12" (with project)');
+    /** Runs a process-instance operation with the resolved session and returns JSON text. */
+    const runProcessTool = async (
+      args: {
+        sessionId?: number | undefined;
+        username?: string | undefined;
+        account?: string | undefined;
+        project?: string | undefined;
+        instance?: string | undefined;
+      },
+      fn: (ctx: { env: eb.Environment; cookies: any[]; instanceId?: string }) => Promise<unknown>,
+    ) => {
+      const session = resolveMcpSession(args.sessionId, args.username, args.account);
+      const env = eb.getEnvironment(session.environment);
+      const cookies = getMcpStoredCookies(session);
+      try {
+        let instanceId: string | undefined;
+        if (args.instance) {
+          const { resolveInstanceId } = await import('../lib/process-command-utils.js');
+          instanceId = await resolveInstanceId({ env, cookies }, args.instance, args.project);
+        }
+        const result = await fn({ env, cookies, ...(instanceId ? { instanceId } : {}) });
+        return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+      } finally {
+        await eb.BrowserManager.getInstance().closeBrowser();
+      }
+    };
+
+    server.tool(
+      'eb_process_startable',
+      'List the processes the user can start (initiate) in a project.',
+      { ...sessionSchema, project: z.string().describe('Project name or PortalID') },
+      async (a) =>
+        runProcessTool(a, (c) => pi.listStartableProcesses({ ...c, project: a.project })),
+    );
+
+    server.tool(
+      'eb_process_instances',
+      "List a project's open process instances (name, subject, step, status, dates).",
+      {
+        ...sessionSchema,
+        project: z.string().describe('Project name or PortalID'),
+        process: z.string().optional().describe('Filter by process prefix or type'),
+        search: z.string().optional().describe('Text filter'),
+      },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.listProcessInstances({
+            ...c,
+            project: a.project,
+            process: a.process,
+            search: a.search,
+          }),
+        ),
+    );
+
+    server.tool(
+      'eb_process_view',
+      'Show a process instance: current step, status, the workflow actions available to the user, ownership state, and every field (label, type, value, editable, options).',
+      {
+        ...sessionSchema,
+        instance: instanceSchema,
+        project: z.string().optional().describe('Project (needed when instance is a name)'),
+      },
+      async (a) =>
+        runProcessTool(a, (c) => pi.getProcessInstance({ ...c, instanceId: c.instanceId! })),
+    );
+
+    server.tool(
+      'eb_process_start',
+      'Start (initiate) a process in a project, filling start-form fields, then Submit (or save a draft). Live action: creates a real instance and may notify the next actors.',
+      {
+        ...sessionSchema,
+        project: z.string().describe('Project name or PortalID'),
+        process: z.string().describe('Process name, prefix, or ProcessID'),
+        subject: z
+          .string()
+          .optional()
+          .describe('Subject (only when the workflow allows a manual subject)'),
+        fields: fieldsSchema,
+        draft: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe('Save as a draft instead of submitting'),
+        dryRun: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe('Validate and fill without submitting'),
+      },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.startProcessInstance({
+            ...c,
+            project: a.project,
+            process: a.process,
+            subject: a.subject,
+            fields: a.fields ?? {},
+            draft: a.draft,
+            dryRun: a.dryRun,
+          }),
+        ),
+    );
+
+    server.tool(
+      'eb_process_set_fields',
+      'Set fields on a process instance and save (drafts are saved as drafts). Only fields editable at the current step can be set. If ownership of a role-assigned step is pending, pass acceptOwnership: true.',
+      {
+        ...sessionSchema,
+        instance: instanceSchema,
+        project: z.string().optional(),
+        fields: fieldsSchema,
+        acceptOwnership: z.boolean().optional().default(false),
+        dryRun: z.boolean().optional().default(false),
+      },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.setProcessInstanceFields({
+            ...c,
+            instanceId: c.instanceId!,
+            fields: a.fields ?? {},
+            acceptOwnership: a.acceptOwnership,
+            dryRun: a.dryRun,
+          }),
+        ),
+    );
+
+    server.tool(
+      'eb_process_action',
+      'Take a workflow action (e.g. Approve, Revise, Close) on a process instance, optionally with a comment and field updates. Live action: advances the workflow and may notify others. Use eb_process_view to list available actions first.',
+      {
+        ...sessionSchema,
+        instance: instanceSchema,
+        project: z.string().optional(),
+        action: z.string().describe('Action name (case-insensitive) or action ID'),
+        comment: z.string().optional().describe('Comment (required by some actions)'),
+        privateComment: z.boolean().optional().default(false),
+        fields: fieldsSchema,
+        acceptOwnership: z.boolean().optional().default(false),
+      },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.takeProcessAction({
+            ...c,
+            instanceId: c.instanceId!,
+            action: a.action,
+            comment: a.comment,
+            privateComment: a.privateComment,
+            fields: a.fields ?? {},
+            acceptOwnership: a.acceptOwnership,
+          }),
+        ),
+    );
+
+    server.tool(
+      'eb_process_accept_ownership',
+      "Accept ownership of an instance's current role-assigned step (the user becomes responsible for completing it).",
+      { ...sessionSchema, instance: instanceSchema, project: z.string().optional() },
+      async (a) =>
+        runProcessTool(a, (c) => pi.acceptProcessOwnership({ ...c, instanceId: c.instanceId! })),
+    );
+
+    server.tool(
+      'eb_process_submit_draft',
+      'Submit a draft process instance (optionally setting fields first).',
+      { ...sessionSchema, instance: z.string().describe('Draft InstanceID'), fields: fieldsSchema },
+      async (a) =>
+        runProcessTool(a, (c) =>
+          pi.submitProcessDraft({ ...c, instanceId: c.instanceId!, fields: a.fields ?? {} }),
+        ),
     );
 
     server.tool(

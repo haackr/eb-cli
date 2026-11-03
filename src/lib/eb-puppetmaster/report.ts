@@ -1,7 +1,6 @@
 import Papa from 'papaparse';
-import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';
-import { injectEbHelper, waitForEBuilderPageToSettle } from './exec.js';
-import { detectLoginPage, sessionCheckErrorFor } from './session-check.js';
+import { Environment } from './index.js';
+import { injectEbHelper } from './exec.js';
 import {
   applyWizard,
   readWizard,
@@ -18,6 +17,7 @@ import {
   type WizardStepData,
   type RawStepValues,
 } from './report-wizard.js';
+import { gotoAuthenticated, withSessionPage, type SessionPageOptions } from './session-page.js';
 import * as db from '../db.js';
 
 export interface ReportSummaryItem {
@@ -111,45 +111,12 @@ export function normalizeReportId(reportId: string): string {
 }
 
 /** Opens an isolated page with the session cookies, runs `fn`, and always cleans up. */
-/** Common options. `origin` overrides the environment URL (used by tests against a mock server). */
-interface SessionPageOptions {
-  env: Environment;
-  cookies: puppeteer.Cookie[];
-  browser?: puppeteer.Browser | undefined;
-  origin?: string | undefined;
-}
-
-async function withSessionPage<T>(
+/** Isolated session page whose dialogs are dismissed and recorded for wizard error messages. */
+function withReportPage<T>(
   options: SessionPageOptions,
   fn: (page: puppeteer.Page, origin: string) => Promise<T>,
-  pageOptions: { blockAssets?: boolean } = { blockAssets: true },
 ): Promise<T> {
-  const browserInstance =
-    options.browser ||
-    (await BrowserManager.getInstance().getBrowser(true, ['--window-size=1440,900'], false, {
-      allowDaemon: true,
-    }));
-  const context = await browserInstance.createBrowserContext();
-  let page: puppeteer.Page | null = null;
-  try {
-    await context.setCookie(...options.cookies);
-    page = await context.newPage();
-    await optimizePageForAutomation(page, pageOptions);
-    // Wizard validation alerts must never block automation; they are recorded for errors.
-    trackWizardDialogs(page);
-    return await fn(page, options.origin ?? `https://${options.env}.${baseurl}`);
-  } finally {
-    if (page) await page.close().catch(() => {});
-    await context.close().catch(() => {});
-  }
-}
-
-async function gotoAuthenticated(page: puppeteer.Page, url: string, origin: string): Promise<void> {
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-  await waitForEBuilderPageToSettle(page);
-  if (await detectLoginPage(page)) {
-    throw sessionCheckErrorFor({ reason: 'redirected_to_login', landedUrl: page.url() }, origin);
-  }
+  return withSessionPage(options, fn, { onPage: trackWizardDialogs });
 }
 
 /** Parses the report tree on /da2/Reports/index.aspx (modus-tree-view). Runs in the page. */
@@ -223,7 +190,7 @@ export async function fetchReportCatalog(options: {
     if (cached) return cached;
   }
 
-  const reports = await withSessionPage(options, async (page, origin) => {
+  const reports = await withReportPage(options, async (page, origin) => {
     await gotoAuthenticated(page, `${origin}/da2/Reports/index.aspx`, origin);
     return await readReportTree(page);
   });
@@ -307,7 +274,7 @@ export async function exportReportConfig(options: {
   browser?: puppeteer.Browser | undefined;
 }): Promise<ReportConfig> {
   const reportId = normalizeReportId(options.reportId);
-  return await withSessionPage(options, async (page, origin) => {
+  return await withReportPage(options, async (page, origin) => {
     await gotoAuthenticated(page, `${origin}/da2/Reports/index.aspx`, origin);
     const meta = (await readReportTree(page)).find((r) => r.id === reportId);
     if (meta && meta.type !== 'custom') {
@@ -364,7 +331,7 @@ export async function createReportFromConfig(options: {
   const { config } = options;
   assertReportConfig(config);
 
-  return await withSessionPage(options, async (page, origin) => {
+  return await withReportPage(options, async (page, origin) => {
     await gotoAuthenticated(page, `${origin}/da2/Reports/index.aspx`, origin);
     await startNewReportWizard(page, origin);
     const { warnings } = await applyWizard(page, configToWizardData(config));
@@ -404,7 +371,7 @@ export async function runReport(options: RunReportOptions): Promise<RunReportRes
   const reportId = normalizeReportId(options.reportId);
   const limit = options.limit ?? 50;
 
-  return await withSessionPage(options, async (page, origin) => {
+  return await withReportPage(options, async (page, origin) => {
     await gotoAuthenticated(
       page,
       `${origin}/da2/Reports/ReportResults.aspx?ReportID=${reportId}`,
