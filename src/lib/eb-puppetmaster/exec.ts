@@ -193,6 +193,7 @@ export function resolveSessionUrl(env: Environment, pathOrUrl?: string): string 
 export async function waitForEBuilderPageToSettle(
   page: puppeteer.Page,
   timeoutMs: number = 15_000,
+  options: { networkIdle?: boolean } = {},
 ): Promise<void> {
   if (typeof page.waitForFunction === 'function') {
     await page
@@ -238,7 +239,7 @@ export async function waitForEBuilderPageToSettle(
       .catch(() => null);
   }
 
-  if (typeof page.waitForNetworkIdle === 'function') {
+  if (options.networkIdle !== false && typeof page.waitForNetworkIdle === 'function') {
     await page.waitForNetworkIdle({ idleTime: 400, timeout: 5_000 }).catch(() => null);
   }
 }
@@ -887,6 +888,11 @@ export function looksLikePuppeteerScript(code: string): boolean {
     BARE_PAGE_PARAM.test(normalized) ||
     PAGE_API_CALL.test(normalized)
   );
+}
+
+/** Injects the in-browser `window.eb` helper into the page (idempotent). */
+export async function injectEbHelper(page: puppeteer.Page): Promise<void> {
+  await page.evaluate(inBrowserEbHelper);
 }
 
 async function evaluateDomScript(

@@ -2,8 +2,10 @@ import { Args, Flags } from '@oclif/core';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
 import {
+  compactProcessSchema,
   fetchProcessSchema,
   getCachedProcessSchema,
+  type CompactProcessSchema,
   type ProcessSchema,
 } from '../../lib/eb-puppetmaster/process-schema.js';
 
@@ -42,7 +44,7 @@ export default class ProcessInspect extends BaseSessionCommand {
     }),
   };
 
-  public async run(): Promise<ProcessSchema | void> {
+  public async run(): Promise<ProcessSchema | CompactProcessSchema | void> {
     const { args, flags } = await this.parse(ProcessInspect);
 
     const session = await this.getSession(flags);
@@ -52,10 +54,11 @@ export default class ProcessInspect extends BaseSessionCommand {
     if (useCache) {
       const cached = getCachedProcessSchema(session.environment, session.account, args.process);
       if (cached) {
+        const out = flags.compact ? compactProcessSchema(cached) : cached;
         if (this.jsonEnabled()) {
-          return cached;
+          return out;
         }
-        this.log(JSON.stringify(cached, null, 2));
+        this.log(JSON.stringify(out, null, 2));
         return;
       }
     }
@@ -72,11 +75,12 @@ export default class ProcessInspect extends BaseSessionCommand {
         useCache: false,
       });
 
+      const out = flags.compact ? compactProcessSchema(schema) : schema;
       if (this.jsonEnabled()) {
-        return schema;
+        return out;
       }
 
-      this.log(JSON.stringify(schema, null, 2));
+      this.log(JSON.stringify(out, null, 2));
     } finally {
       await eb.BrowserManager.getInstance().closeBrowser();
     }

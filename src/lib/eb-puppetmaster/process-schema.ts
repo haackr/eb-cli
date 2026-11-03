@@ -1,10 +1,17 @@
 import { baseurl, BrowserManager, Environment, optimizePageForAutomation } from './index.js';
+import { injectEbHelper, waitForEBuilderPageToSettle } from './exec.js';
+import { detectLoginPage, sessionCheckErrorFor } from './session-check.js';
 import * as db from '../db.js';
 
 export interface ProcessDataFieldSchema {
   id?: string | undefined;
+  /** Field label as shown in e-Builder. */
   name: string;
+  variableName?: string | undefined;
   type: string;
+  permission?: string | undefined;
+  unique?: boolean | undefined;
+  /** Required on at least one page layout. */
   required?: boolean | undefined;
   options?: string[] | undefined;
   defaultValue?: string | undefined;
@@ -15,18 +22,50 @@ export interface ProcessWorkflowStepSchema {
   name: string;
   type: string;
   actions: string[];
+  actorLayout?: string | undefined;
+  nonActorLayout?: string | undefined;
 }
 
+export interface ProcessLayoutSummary {
+  id: string;
+  name: string;
+  inUse?: string | undefined;
+  actorLayout?: string | undefined;
+  nonActorLayout?: string | undefined;
+}
+
+export interface ProcessWorkflowSummary {
+  id: string;
+  name: string;
+  projectAssignments?: string | undefined;
+  datePublished?: string | undefined;
+  lastUsed?: string | undefined;
+}
+
+export type LayoutFieldAccess = 'required' | 'editable' | 'readonly' | 'hidden';
+
 export interface ProcessSchema {
+  processId?: string | undefined;
+  /** @deprecated Alias of processId (pre-0.2 name). */
   processTypeId?: string | undefined;
   name: string;
   prefix?: string | undefined;
+  variableName?: string | undefined;
   type?: string | undefined;
   description?: string | undefined;
+  projectAssignment?: string | undefined;
+  active?: string | undefined;
   costIntegrated?: boolean | undefined;
+  /** Steps of the account-default (or first) workflow. */
   workflowSteps: ProcessWorkflowStepSchema[];
+  /** Name of the workflow `workflowSteps` came from. */
+  workflow?: string | undefined;
+  workflows?: ProcessWorkflowSummary[] | undefined;
   dataFields: ProcessDataFieldSchema[];
-  layoutMatrix: Record<string, Record<string, 'required' | 'editable' | 'readonly' | 'hidden'>>;
+  layouts?: ProcessLayoutSummary[] | undefined;
+  /** layout name → field label → access on that layout (fields not on a layout are "hidden"). */
+  layoutMatrix: Record<string, Record<string, LayoutFieldAccess>>;
+  warnings?: string[] | undefined;
   cachedAt?: string | undefined;
 }
 
@@ -58,23 +97,20 @@ export function saveCachedProcessSchema(
   db.setCachedSchema(env, account, 'process', normalizedKey, JSON.stringify(payload));
 }
 
-export function parseProcessSchemaFromHtml(_html: {
-  processTypeHtml?: string | undefined;
-  dataFieldsHtml?: string | undefined;
-  pageLayoutHtml?: string | undefined;
-}): ProcessSchema {
-  // Pure parser for HTML structures to support mock testing and offline processing
-  const schema: ProcessSchema = {
-    name: 'Process',
-    workflowSteps: [],
-    dataFields: [],
-    layoutMatrix: {},
-  };
+/** Maximum number of page layouts whose XML is fetched for the layout matrix. */
+const MAX_LAYOUTS = 30;
 
-  return schema;
-}
-
+/**
+ * Builds a process schema from the Setup pages (all read-only):
+ * ManageProcesses → ManageDataFields / ManageLayouts / ManageWorkflows grids, plus
+ * layout XML (field access per layout) and the default workflow's XML (steps and actions).
+ *
+ * `processName` matches the process name case-insensitively (exact match first, then a unique
+ * partial match), or can be a ProcessID GUID.
+ */
 export async function fetchProcessSchema(options: {
+  /** Overrides the environment URL (used by tests against a mock server). */
+  origin?: string | undefined;
   env: Environment;
   cookies: puppeteer.Cookie[];
   processName: string;
@@ -104,121 +140,233 @@ export async function fetchProcessSchema(options: {
     page = await context.newPage();
     await optimizePageForAutomation(page, { blockAssets: true });
 
-    const origin = `https://${env}.${baseurl}`;
-    const targetUrl = `${origin}/da2/Setup/Processes/ProcessTypesView.aspx`;
-
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-
-    const extracted = await page.evaluate((targetName) => {
-      const getDoc = () => {
-        const iframe = document.querySelector<HTMLIFrameElement>(
-          'iframe#contentFrame, iframe[name="contentFrame"], iframe',
-        );
-        try {
-          if (iframe && iframe.contentDocument && iframe.contentDocument.body) {
-            return iframe.contentDocument;
-          }
-        } catch {}
-        return document;
-      };
-
-      const doc = getDoc();
-      const normalize = (s: string | null | undefined) => (s || '').toLowerCase().trim();
-      const rows = Array.from(
-        doc.querySelectorAll('table.rgMasterTable tbody tr, table.grid tbody tr, table tr'),
-      );
-
-      let matchedRow: Element | null = null;
-      let processTypeId = '';
-      let prefix = '';
-      let desc = '';
-
-      for (const row of rows) {
-        const link = row.querySelector('a');
-        const text = link?.textContent?.trim() || '';
-        if (
-          normalize(text) === normalize(targetName) ||
-          (text && normalize(targetName).includes(normalize(text)))
-        ) {
-          matchedRow = row;
-          const href = link?.getAttribute('href') || '';
-          const match = href.match(/ProcessTypeID=([a-f0-9-]+)/i);
-          if (match && match[1]) {
-            processTypeId = match[1];
-          }
-          const cells = row.querySelectorAll('td');
-          if (cells.length > 2) {
-            prefix = cells[1]?.textContent?.trim() || '';
-            desc = cells[2]?.textContent?.trim() || '';
-          }
-          break;
-        }
-      }
-
-      return {
-        found: Boolean(matchedRow),
-        processTypeId,
-        prefix,
-        desc,
-      };
-    }, processName);
-
-    const schema: ProcessSchema = {
-      name: processName,
-      processTypeId: extracted.processTypeId || undefined,
-      prefix: extracted.prefix || undefined,
-      description: extracted.desc || undefined,
-      workflowSteps: [],
-      dataFields: [],
-      layoutMatrix: {},
-    };
-
-    if (extracted.processTypeId) {
-      // Fetch Data Fields
-      const dataFieldsUrl = `${origin}/da2/Setup/Processes/DataFieldsView.aspx?ProcessTypeID=${extracted.processTypeId}`;
-      await page.goto(dataFieldsUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-
-      const fields = await page.evaluate(() => {
-        const getDoc = () => {
-          const iframe = document.querySelector<HTMLIFrameElement>(
-            'iframe#contentFrame, iframe[name="contentFrame"], iframe',
-          );
-          try {
-            if (iframe && iframe.contentDocument) return iframe.contentDocument;
-          } catch {}
-          return document;
-        };
-        const doc = getDoc();
-        const trs = Array.from(
-          doc.querySelectorAll('table.rgMasterTable tbody tr, table.grid tbody tr, table tr'),
-        );
-        const result: Array<{ name: string; type: string; required?: boolean }> = [];
-
-        for (const tr of trs) {
-          const tds = tr.querySelectorAll('td');
-          if (tds.length >= 2) {
-            const name = tds[0]?.textContent?.trim() || '';
-            const type = tds[1]?.textContent?.trim() || 'Text';
-            const reqText = tds[2]?.textContent?.trim() || '';
-            if (name && name !== 'Field Name') {
-              result.push({
-                name,
-                type,
-                required: reqText.toLowerCase().includes('yes') || reqText.includes('*'),
-              });
-            }
-          }
-        }
-        return result;
-      });
-
-      schema.dataFields = fields;
+    const origin = options.origin ?? `https://${env}.${baseurl}`;
+    await page.goto(`${origin}/da2/Setup/Admin/Processes/ManageProcesses.aspx`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 90_000,
+    });
+    await waitForEBuilderPageToSettle(page);
+    if (await detectLoginPage(page)) {
+      throw sessionCheckErrorFor({ reason: 'redirected_to_login', landedUrl: page.url() }, origin);
     }
+    await injectEbHelper(page);
 
+    const result = await page.evaluate(
+      async (target: string, maxLayouts: number) => {
+        const eb = (window as any).eb;
+        const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
+        const guidOf = (href: string, param: string) =>
+          (href.match(new RegExp(`${param}=\\{?([0-9a-f-]{36})`, 'i'))?.[1] ?? '').toLowerCase();
+
+        /** Parses an e-Builder TableGrid (header row may be <td> sort links). */
+        const parseGrid = (root: Document, idSuffix: string) => {
+          const table = root.querySelector<HTMLTableElement>(`table[id$="${idSuffix}"]`);
+          if (!table) return null;
+          const rows = Array.from(table.rows);
+          const headerRow = rows.find((r) => r.querySelector('th')) ?? rows[0];
+          const headers = Array.from(headerRow?.cells ?? []).map(
+            (c, i) => clean(c.textContent) || `Column_${i + 1}`,
+          );
+          return rows
+            .filter((r) => r !== headerRow && r.cells.length >= Math.min(2, headers.length))
+            .map((r) => ({
+              cells: Object.fromEntries(headers.map((h, i) => [h, clean(r.cells[i]?.textContent)])),
+              hrefs: Array.from(r.querySelectorAll('a[href]')).map(
+                (a) => a.getAttribute('href') || '',
+              ),
+            }))
+            .filter((r) => Object.values(r.cells).some(Boolean));
+        };
+        const fetchDoc = async (url: string) => {
+          const res = await fetch(url, { credentials: 'include' });
+          if (!res.ok) throw new Error(`HTTP ${res.status} loading ${url}`);
+          return new DOMParser().parseFromString(await res.text(), 'text/html');
+        };
+        const xml = (text: string) => new DOMParser().parseFromString(text, 'text/xml');
+        const child = (el: Element, tag: string) =>
+          Array.from(el.children)
+            .find((c) => c.tagName === tag)
+            ?.textContent?.trim() ?? '';
+
+        // 1. Find the process.
+        const processes = (parseGrid(document, 'grdProcesses') ?? []).map((r) => ({
+          ...r,
+          id: r.hrefs.map((h) => guidOf(h, 'ProcessID')).find(Boolean) ?? '',
+          name: r.cells['Name'] ?? '',
+        }));
+        const t = target.trim().toLowerCase().replace(/[{}]/g, '');
+        let matches = processes.filter((p) => p.id === t || p.name.toLowerCase() === t);
+        if (matches.length === 0)
+          matches = processes.filter((p) => p.name.toLowerCase().includes(t));
+        if (matches.length !== 1) {
+          return {
+            error:
+              matches.length === 0
+                ? `Process "${target}" not found (${processes.length} processes in this account)`
+                : `Process "${target}" is ambiguous: ${matches.map((m) => m.name).join(', ')}`,
+          };
+        }
+        const proc = matches[0]!;
+        const pid = proc.id;
+        const warnings: string[] = [];
+
+        // 2. Grids.
+        const [fieldsDoc, layoutsDoc, workflowsDoc] = await Promise.all([
+          fetchDoc(`/da2/Setup/Admin/Processes/ManageDataFields.aspx?ProcessID={${pid}}`),
+          fetchDoc(`/da2/Setup/Admin/Processes/ManageLayouts.aspx?ProcessID={${pid}}`),
+          fetchDoc(`/da2/Setup/Admin/Processes/ManageWorkflows.aspx?ProcessID={${pid}}`),
+        ]);
+        const dataFields = (parseGrid(fieldsDoc, 'dgFields') ?? [])
+          .map((r) => ({
+            name: r.cells['Label'] ?? '',
+            variableName: r.cells['Variable Name'] || undefined,
+            type: r.cells['Data Type'] || 'Unknown',
+            permission: r.cells['Permission'] || undefined,
+            unique: /^(yes|true)$/i.test(r.cells['Unique'] ?? '') || undefined,
+          }))
+          .filter((f) => f.name);
+        const layouts = (parseGrid(layoutsDoc, 'grdLayouts') ?? [])
+          .map((r) => ({
+            id: r.hrefs.map((h) => guidOf(h, 'LayoutID')).find(Boolean) ?? '',
+            name: r.cells['Layout Name'] ?? '',
+            inUse: r.cells['In Use'] || undefined,
+            actorLayout: r.cells['Actor Layout?'] || undefined,
+            nonActorLayout: r.cells['Non-Actor Layout?'] || undefined,
+          }))
+          .filter((l) => l.id);
+        const workflows = (parseGrid(workflowsDoc, 'grdWorkflows') ?? [])
+          .map((r) => ({
+            id: r.hrefs.map((h) => guidOf(h, 'WorkflowID')).find(Boolean) ?? '',
+            name: r.cells['Workflow Name'] ?? '',
+            projectAssignments: r.cells['Project Assignments'] || undefined,
+            datePublished: r.cells['Date Published'] || undefined,
+            lastUsed: r.cells['Last Used'] || undefined,
+          }))
+          .filter((w) => w.id);
+
+        // 3. Layout XML → field access matrix.
+        const layoutMatrix: Record<string, Record<string, string>> = {};
+        const fieldIds: Record<string, string> = {};
+        const requiredSomewhere = new Set<string>();
+        if (layouts.length > maxLayouts) {
+          warnings.push(`Only the first ${maxLayouts} of ${layouts.length} layouts were read`);
+        }
+        await Promise.all(
+          layouts.slice(0, maxLayouts).map(async (l) => {
+            try {
+              const doc = xml(await eb.getLayoutXml(pid, l.id));
+              const access: Record<string, string> = {};
+              for (const f of Array.from(doc.getElementsByTagName('ebSectionField'))) {
+                const name = child(f, 'DataFieldName');
+                if (!name) continue;
+                const id = child(f, 'DataFieldID');
+                if (id && !/^0{8}-/.test(id)) fieldIds[name] = id;
+                const required = child(f, 'IsRequired') === 'true';
+                if (required) requiredSomewhere.add(name);
+                access[name] = required
+                  ? 'required'
+                  : child(f, 'IsReadOnly') === 'true'
+                    ? 'readonly'
+                    : 'editable';
+              }
+              for (const f of dataFields) access[f.name] ??= 'hidden';
+              layoutMatrix[l.name] = access;
+            } catch (e: any) {
+              warnings.push(`Layout "${l.name}" could not be read: ${e?.message ?? e}`);
+            }
+          }),
+        );
+        const layoutNameById = Object.fromEntries(layouts.map((l) => [l.id, l.name]));
+
+        // 4. Default workflow → steps.
+        const defaultWorkflow =
+          workflows.find((w) => /account default/i.test(w.projectAssignments ?? '')) ??
+          workflows[0];
+        let workflowSteps: Array<Record<string, unknown>> = [];
+        if (defaultWorkflow) {
+          try {
+            const wf = await eb.getWorkflowData(pid, defaultWorkflow.id);
+            const doc = xml(wf.xml);
+            workflowSteps = Array.from(doc.getElementsByTagName('ebStep')).map((s) => {
+              const actor = (s.getAttribute('ActorLayoutID') ?? '').toLowerCase();
+              const nonActor = (s.getAttribute('NonActorLayoutID') ?? '').toLowerCase();
+              return {
+                id: s.getAttribute('StepID') ?? undefined,
+                name: s.getAttribute('Name') ?? '',
+                type: s.getAttribute('StepType') ?? '',
+                actions: Array.from(s.getElementsByTagName('ebAction')).map(
+                  (a) => a.getAttribute('ButtonText') || a.getAttribute('Name') || '',
+                ),
+                actorLayout: layoutNameById[actor] || undefined,
+                nonActorLayout: layoutNameById[nonActor] || undefined,
+              };
+            });
+          } catch (e: any) {
+            warnings.push(
+              `Workflow "${defaultWorkflow.name}" could not be read: ${e?.message ?? e}`,
+            );
+          }
+        }
+
+        return {
+          schema: {
+            processId: pid,
+            processTypeId: pid,
+            name: proc.name,
+            prefix: proc.cells['Prefix'] || undefined,
+            variableName: proc.cells['Variable Name'] || undefined,
+            description: proc.cells['Description'] || undefined,
+            projectAssignment: proc.cells['Project Assignment'] || undefined,
+            active: proc.cells['Active'] || undefined,
+            workflow: defaultWorkflow?.name,
+            workflowSteps,
+            workflows,
+            dataFields: dataFields.map((f) => ({
+              ...(fieldIds[f.name] ? { id: fieldIds[f.name] } : {}),
+              ...f,
+              ...(requiredSomewhere.has(f.name) ? { required: true } : {}),
+            })),
+            layouts,
+            layoutMatrix,
+            ...(warnings.length ? { warnings } : {}),
+          },
+        };
+      },
+      processName,
+      MAX_LAYOUTS,
+    );
+
+    if ('error' in result) throw new Error(result.error);
+    const schema = JSON.parse(JSON.stringify(result.schema)) as ProcessSchema;
     saveCachedProcessSchema(env, account, processName, schema);
     return schema;
   } finally {
     if (page) await page.close().catch(() => {});
     await context.close().catch(() => {});
   }
+}
+
+export interface CompactProcessSchema {
+  name: string;
+  processId?: string | undefined;
+  prefix?: string | undefined;
+  /** "Label (Type)" with a trailing * when required on any layout. */
+  fields: string[];
+  /** "Step [Type]: Action1 | Action2". */
+  steps: string[];
+  layouts: string[];
+}
+
+/** Token-efficient projection of a process schema (for `process inspect --compact`). */
+export function compactProcessSchema(schema: ProcessSchema): CompactProcessSchema {
+  return {
+    name: schema.name,
+    processId: schema.processId ?? schema.processTypeId,
+    prefix: schema.prefix,
+    fields: schema.dataFields.map((f) => `${f.name} (${f.type})${f.required ? '*' : ''}`),
+    steps: schema.workflowSteps.map(
+      (s) => `${s.name} [${s.type}]${s.actions.length ? `: ${s.actions.join(' | ')}` : ''}`,
+    ),
+    layouts: schema.layouts?.map((l) => l.name) ?? Object.keys(schema.layoutMatrix),
+  };
 }

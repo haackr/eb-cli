@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import { BaseSessionCommand } from '../../lib/base-session-command.js';
-import { createReportFromConfig, type ReportConfig } from '../../lib/eb-puppetmaster/report.js';
+import { assertReportConfig, createReportFromConfig } from '../../lib/eb-puppetmaster/report.js';
 
 export default class ReportsImportConfig extends BaseSessionCommand {
   static override description =
@@ -28,6 +28,9 @@ export default class ReportsImportConfig extends BaseSessionCommand {
       char: 'n',
       description: 'Optional name override for the imported report',
     }),
+    folder: Flags.string({
+      description: "Report folder to save into (overrides the config's folder)",
+    }),
   };
 
   public async run(): Promise<unknown> {
@@ -38,11 +41,17 @@ export default class ReportsImportConfig extends BaseSessionCommand {
       this.error(`Report configuration file not found: ${filePath}`);
     }
 
-    const raw = fs.readFileSync(filePath, 'utf8');
-    const config: ReportConfig = JSON.parse(raw);
-
-    if (flags.name) {
-      config.name = flags.name;
+    const config: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (flags.name && config && typeof config === 'object') {
+      (config as { name?: string }).name = flags.name;
+    }
+    if (flags.folder && config && typeof config === 'object') {
+      (config as { folder?: string }).folder = flags.folder;
+    }
+    try {
+      assertReportConfig(config);
+    } catch (err: any) {
+      this.error(err.message);
     }
 
     const session = await this.getSession(flags);
@@ -60,6 +69,8 @@ export default class ReportsImportConfig extends BaseSessionCommand {
       const payload = {
         success: result.success,
         reportName: config.name,
+        reportId: result.reportId,
+        warnings: [...(config.warnings ?? []), ...result.warnings],
         session: {
           id: session.id,
           username: session.username,

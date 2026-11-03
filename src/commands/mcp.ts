@@ -514,7 +514,9 @@ export default class McpCommand extends Command {
           const payload = {
             success: result.success,
             reportName: config.name,
-            dataSource: config.dataSource,
+            reportType: `${config.reportType.text} / ${config.reportSubType.text}`,
+            reportId: result.reportId,
+            warnings: [...(config.warnings ?? []), ...result.warnings],
             fromSession: { id: fromSession.id, account: fromSession.account },
             toSession: { id: toSession.id, account: toSession.account },
             url: result.url,
