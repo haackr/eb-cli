@@ -2,15 +2,25 @@ import { Command, Flags } from '@oclif/core';
 
 /**
  * e-Builder paths (relative; the CLI resolves the host from the session's environment).
- * Verified against a live US1 session on 2026-11-02.
+ * Verified against a live US1 session on 2026-11-02. There is no workflow download handler
+ * (DownloadWorkflowHandler.ashx returns 404); use eb.getWorkflowData instead.
  */
 export const STANDARD_PATHS = {
   home: '/da2/Home/index2.aspx',
   processesView: '/da2/Processes/ProcessesView.aspx',
   manageProcesses: '/da2/Setup/Admin/Processes/ManageProcesses.aspx',
   viewProcess: '/da2/Setup/Admin/Processes/ViewProcess.aspx?ProcessID={GUID}',
+  manageDataFields: '/da2/Setup/Admin/Processes/ManageDataFields.aspx?ProcessID={GUID}',
+  manageLayouts: '/da2/Setup/Admin/Processes/ManageLayouts.aspx?ProcessID={GUID}',
+  viewLayout: '/da2/Setup/Admin/Processes/ViewLayout.aspx?LayoutID={GUID}&ProcessID={GUID}',
+  layoutXml:
+    'GET /da2/Setup/Admin/Processes/AddEditLayout.aspx?ajaxRefresh=1&LayoutID=<guid>&ProcessID=<guid>&defSecID=&moduleSecID=&mode= (use eb.getLayoutXml)',
   manageWorkflows: '/da2/Setup/Admin/Processes/ManageWorkflows.aspx?ProcessID={GUID}',
   viewWorkflow: '/da2/Setup/Admin/Processes/ViewWorkflow.aspx?WorkflowID={GUID}&ProcessID={GUID}',
+  workflowDesigner:
+    '/da2/Setup/Admin/Processes/WorkflowDesigner.aspx?WorkflowID={GUID}&ProcessID={GUID}&mode=0 (exposes securityToken)',
+  workflowDataRpc:
+    'POST /da2/Processes/ProcessesService.asmx/GetWorkflowData { securityToken, processID, workflowID, version } (use eb.getWorkflowData)',
   importProcesses: '/da2/Processes/ImportProcesses/ImportProcesses.aspx',
   reportsList: '/da2/Reports/index.aspx',
   editReport: '/da2/Reports/AddEditReport.aspx?ReportID={GUID}',
@@ -102,8 +112,10 @@ export default class AgentGuide extends Command {
           'Serializes the ASP.NET form (__VIEWSTATE, __EVENTVALIDATION, inputs) into URLSearchParams. Overrides accept short control names (btnSave) or full names; null removes a field.',
         'eb.postWebForm(url?, formOrSelector?, overrides?, eventTarget?, eventArg?)':
           'POSTs the form via fetch() and resolves { url, status, html, doc } (doc omitted in Puppeteer mode).',
-        'eb.downloadWorkflowXml(workflowId)':
-          'Returns the .ebw workflow XML for a WorkflowID GUID.',
+        'eb.getWorkflowData(processId, workflowId, version?)':
+          'Returns { xml: "<ebWorkflow>…", isActive } via the workflow designer token + ProcessesService.GetWorkflowData. version: 3 = published (default), 1 = saved draft. GUIDs with or without braces.',
+        'eb.getLayoutXml(processId, layoutId)':
+          'Returns the page layout definition XML (<ebLayout>).',
         'eb.exportReportCsv(reportId)': 'Runs a custom report and returns the full CSV export.',
       },
       standardPaths: STANDARD_PATHS,

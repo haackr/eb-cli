@@ -15,6 +15,10 @@ describe('Agent Guide Command (src/commands/agent/guide.ts)', () => {
     assert.ok(!JSON.stringify(result.standardPaths).includes('ProcessTypesView'));
     assert.ok(result.errorCodes.NetworkError);
     assert.ok(result.browserHelperApi['eb.exportReportCsv(reportId)']);
+    assert.ok(result.browserHelperApi['eb.getWorkflowData(processId, workflowId, version?)']);
+    assert.ok(result.browserHelperApi['eb.getLayoutXml(processId, layoutId)']);
+    assert.ok(!JSON.stringify(result).includes('DownloadWorkflowHandler'));
+    assert.match(result.standardPaths.workflowDataRpc, /\/da2\/Processes\/ProcessesService\.asmx/);
     assert.match(result.workflows.puppeteerEvaluation.description, /async \(\{ page/);
     assert.match(result.workflows.sessionSelection.description, /--account/);
   });

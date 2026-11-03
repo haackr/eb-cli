@@ -131,7 +131,7 @@ export default class SessionExec extends BaseSessionCommand {
       ) {
         mode = 'puppeteer';
         process.stderr.write(
-          'eb exec: script looks like a Puppeteer script ({ page } / page.*); running with --puppeteer. Pass --no-puppeteer to force DOM mode.\n',
+          'eb exec: script uses the Puppeteer context ({ page, eb, fs, ... } or page.*); running with --puppeteer. Pass --no-puppeteer to force DOM mode.\n',
         );
       }
 

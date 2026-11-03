@@ -470,6 +470,8 @@ describe('Session Exec Operations (src/lib/eb-puppetmaster/exec.ts)', () => {
         'async (page) => page.title()',
         'page => page.title()',
         'await page.goto("/da2/Home/index2.aspx")',
+        'async ({ eb }) => eb.getWorkflowData(pid, wid)',
+        'async ({ fs, arg }) => fs.readFileSync(arg)',
       ]) {
         assert.strictEqual(looksLikePuppeteerScript(code), true, code);
       }

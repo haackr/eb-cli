@@ -754,12 +754,75 @@ const inBrowserEbHelper = `
           });
         });
       },
-      /** Downloads a workflow definition (.ebw XML) by WorkflowID GUID. */
-      downloadWorkflowXml: function(workflowId) {
-        var url = location.origin + '/da2/Setup/Admin/Processes/Workflows/DownloadWorkflowHandler.ashx?WorkflowID=' + encodeURIComponent(workflowId);
+      _stripBraces: function(guid) {
+        return String(guid || '').trim().replace(/^\\{|\\}$/g, '');
+      },
+      /**
+       * Fetches a workflow definition: { xml: '<ebWorkflow>...', isActive }.
+       * Reads the designer's securityToken via fetch() (no navigation, so no blocking alerts),
+       * then calls ProcessesService.asmx/GetWorkflowData exactly like the designer does.
+       * version: 3 = published, 1 = saved draft; defaults to the version the designer loads.
+       */
+      getWorkflowData: function(processId, workflowId, version) {
+        var self = this;
+        var pid = this._stripBraces(processId);
+        var wid = this._stripBraces(workflowId);
+        if (!pid || !wid) return Promise.reject(new Error('eb.getWorkflowData(processId, workflowId) requires both GUIDs'));
+        var designerUrl = location.origin + '/da2/Setup/Admin/Processes/WorkflowDesigner.aspx?WorkflowID={' + wid + '}&ProcessID={' + pid + '}&mode=0';
+        var tokenOf = function(html) {
+          var m = html.match(/"token"\\s*:\\s*"([^"]+)"/i) || html.match(/\\btoken\\s*:\\s*['"]([^'"]+)['"]/i);
+          return m ? m[1] : null;
+        };
+        var versionOf = function(html) {
+          var m = html.match(/ucDesigner\\.load\\([^)]*,\\s*(\\d+)\\s*\\)/);
+          return m ? Number(m[1]) : 3;
+        };
+        return this._fetchText(designerUrl).then(function(res) {
+          if (tokenOf(res.text)) return res;
+          if (res.text.indexOf('btnLoadWorkflow') === -1) return res;
+          // "Choose Workflow Version" prompt: choose Published and continue once.
+          var doc = new DOMParser().parseFromString(res.text, 'text/html');
+          var params = self.buildFormParams(self._resolveForm(doc), {
+            'ctl00$contentSection$rbPublished': 'rbPublished',
+            'ctl00$contentSection$btnLoadWorkflow': 'Continue'
+          });
+          return self._fetchText(designerUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: params.toString()
+          });
+        }).then(function(res) {
+          var token = tokenOf(res.text);
+          if (!token) throw new Error('Could not extract the workflow designer securityToken from ' + designerUrl);
+          var v = version === undefined || version === null ? versionOf(res.text) : Number(version);
+          return fetch(location.origin + '/da2/Processes/ProcessesService.asmx/GetWorkflowData', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ securityToken: token, processID: pid, workflowID: wid, version: v })
+          });
+        }).then(function(r) {
+          return r.text().then(function(text) {
+            var body = null;
+            try { body = JSON.parse(text); } catch (e) {}
+            if (!r.ok || !body || !body.d) {
+              var msg = (body && (body.Message || body.message)) || ('HTTP ' + r.status);
+              throw new Error('GetWorkflowData failed: ' + msg);
+            }
+            return { xml: body.d.xml, isActive: Boolean(body.d.isActive) };
+          });
+        });
+      },
+      /** Fetches a page layout definition ('<?xml ...><ebLayout>...') by ProcessID + LayoutID. */
+      getLayoutXml: function(processId, layoutId) {
+        var pid = this._stripBraces(processId);
+        var lid = this._stripBraces(layoutId);
+        if (!pid || !lid) return Promise.reject(new Error('eb.getLayoutXml(processId, layoutId) requires both GUIDs'));
+        var url = location.origin + '/da2/Setup/Admin/Processes/AddEditLayout.aspx?rand=' + Math.random() +
+          '&ajaxRefresh=1&LayoutID=' + lid + '&ProcessID=' + pid + '&defSecID=&moduleSecID=&mode=';
         return this._fetchText(url).then(function(res) {
-          if (/text\\/html/i.test(res.contentType) && !/^\\s*<\\?xml/i.test(res.text)) {
-            throw new Error('Workflow download returned HTML instead of XML (check the WorkflowID)');
+          if (!/<ebLayout\\b/.test(res.text)) {
+            throw new Error('Layout request did not return <ebLayout> XML (check the ProcessID/LayoutID)');
           }
           return res.text;
         });
@@ -811,7 +874,7 @@ export function normalizeUserScript(rawScript: string): string {
 }
 
 const PUPPETEER_PARAM_DESTRUCTURE =
-  /^\s*(?:async\s+)?(?:function\s*\w*\s*)?\(\s*\{[^}]*\b(?:page|browser|context)\b[^}]*\}/;
+  /^\s*(?:async\s+)?(?:function\s*\w*\s*)?\(\s*\{[^}]*\b(?:page|browser|context|eb|fs|path|os|settle|inspect|origin)\b[^}]*\}/;
 const BARE_PAGE_PARAM = /^\s*(?:async\s+)?(?:(?:function\s*\w*\s*)?\(\s*page\s*[,)]|page\s*=>)/;
 const PAGE_API_CALL =
   /\bpage\.(?:goto|evaluate|\$eval|\$\$eval|\$|\$\$|click|type|waitForSelector|waitForNavigation|waitForFunction|waitForNetworkIdle|frames|mainFrame|setRequestInterception|screenshot|keyboard|mouse|on)\b/;

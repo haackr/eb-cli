@@ -38,10 +38,60 @@ describe('In-browser eb WebForms / workflow / report helpers', () => {
           res.writeHead(200, { 'Content-Type': 'text/html' }).end(FORM_PAGE);
         } else if (url.pathname === '/echo') {
           res.writeHead(200, { 'Content-Type': 'text/html' }).end(`<p id="body">${body}</p>`);
-        } else if (url.pathname.endsWith('/Workflows/DownloadWorkflowHandler.ashx')) {
+        } else if (url.pathname === '/da2/Setup/Admin/Processes/WorkflowDesigner.aspx') {
+          const wid = url.searchParams.get('WorkflowID');
+          // Workflow "prompt" first renders the Choose Workflow Version form.
+          if (wid === '{prompt}' && req.method === 'GET') {
+            res
+              .writeHead(200, { 'Content-Type': 'text/html' })
+              .end(
+                '<html><body><form id="aspnetForm" method="post"><input type="hidden" name="__VIEWSTATE" value="wv"/>' +
+                  '<input type="radio" name="ctl00$contentSection$rbPublished" value="rbPublished"/>' +
+                  '<input type="submit" name="ctl00$contentSection$btnLoadWorkflow" value="Continue"/></form></body></html>',
+              );
+            return;
+          }
+          if (wid === '{prompt}') {
+            const p = new URLSearchParams(body);
+            if (p.get('ctl00$contentSection$btnLoadWorkflow') !== 'Continue') {
+              res.writeHead(400).end('missing continue');
+              return;
+            }
+          }
           res
-            .writeHead(200, { 'Content-Type': 'application/octet-stream' })
-            .end(`<?xml version="1.0"?><Workflow id="${url.searchParams.get('WorkflowID')}"/>`);
+            .writeHead(200, { 'Content-Type': 'text/html' })
+            .end(
+              '<html><body><script>var ucDesigner = new WorkflowDesigner({"containerID":"workflowCanvas","token":"tok-123"});' +
+                "ucDesigner.load('p1','w1', 3)</script></body></html>",
+            );
+        } else if (url.pathname === '/da2/Processes/ProcessesService.asmx/GetWorkflowData') {
+          const p = JSON.parse(body || '{}');
+          if (p.securityToken !== 'tok-123' || /[{}]/.test(p.processID + p.workflowID)) {
+            res
+              .writeHead(500, { 'Content-Type': 'application/json' })
+              .end(JSON.stringify({ Message: 'Invalid request' }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(
+            JSON.stringify({
+              d: {
+                __type: 'WorkflowData',
+                xml: `<ebWorkflow id="${p.workflowID}" version="${p.version}"/>`,
+                isActive: true,
+              },
+            }),
+          );
+        } else if (url.pathname === '/da2/Setup/Admin/Processes/AddEditLayout.aspx') {
+          const ok =
+            url.searchParams.get('ajaxRefresh') === '1' &&
+            !/[{}]/.test(`${url.searchParams.get('LayoutID')}${url.searchParams.get('ProcessID')}`);
+          res
+            .writeHead(200, { 'Content-Type': ok ? 'text/xml' : 'text/html' })
+            .end(
+              ok
+                ? `<?xml version="1.0"?><ebLayout id="${url.searchParams.get('LayoutID')}"/>`
+                : '<html>layout editor</html>',
+            );
         } else if (url.pathname === '/da2/Reports/ReportResults.aspx') {
           if (req.method === 'POST') {
             const p = new URLSearchParams(body);
@@ -126,9 +176,28 @@ describe('In-browser eb WebForms / workflow / report helpers', () => {
     assert.strictEqual(r.posted.doc, undefined);
   });
 
-  it('downloadWorkflowXml fetches the workflow handler', async () => {
-    const { result } = await run(`(arg, eb) => eb.downloadWorkflowXml('wf-guid-1')`);
-    assert.match(result as string, /<Workflow id="wf-guid-1"\/>/);
+  it('getWorkflowData reads the designer token and calls ProcessesService.GetWorkflowData', async () => {
+    const { result } = await run(`(arg, eb) => eb.getWorkflowData('{p1}', '{w1}')`);
+    assert.deepStrictEqual(result, { xml: '<ebWorkflow id="w1" version="3"/>', isActive: true });
+
+    const draft = await run(`(arg, eb) => eb.getWorkflowData('p1', 'w1', 1)`);
+    assert.deepStrictEqual(draft.result, {
+      xml: '<ebWorkflow id="w1" version="1"/>',
+      isActive: true,
+    });
+  });
+
+  it('getWorkflowData answers the Choose Workflow Version prompt once', async () => {
+    const { result } = await run(`({ eb }) => eb.getWorkflowData('p1', 'prompt')`, 'puppeteer');
+    assert.deepStrictEqual(result, {
+      xml: '<ebWorkflow id="prompt" version="3"/>',
+      isActive: true,
+    });
+  });
+
+  it('getLayoutXml fetches <ebLayout> XML with brace-less GUIDs', async () => {
+    const { result } = await run(`(arg, eb) => eb.getLayoutXml('{p1}', '{l1}')`);
+    assert.match(result as string, /<ebLayout id="l1"\/>/);
   });
 
   it('exportReportCsv posts the CSV export postback', async () => {
