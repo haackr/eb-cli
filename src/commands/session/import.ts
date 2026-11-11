@@ -2,38 +2,38 @@ import { Command, Flags } from '@oclif/core';
 import { promptImportAndSaveSession } from '../../lib/login-helper.js';
 
 export default class SessionImport extends Command {
-  static override description = 'import an active e-Builder session from Google Chrome';
+  static override description = `import the e-Builder session you are signed in to in Google Chrome
+
+Connects to your running Chrome over remote debugging, reads only the e-Builder cookies, and disconnects; your browser and tabs are left as they are. Requires Chrome 144+ with remote debugging allowed at chrome://inspect/#remote-debugging (one-time setup; eb opens that page for you if needed). Chrome asks you to approve each connection.
+
+The environment, username, and account are detected from the session itself.
+
+The imported session is the same login as your Chrome tab: logging out of either one (eb logout or e-Builder's Log Out) ends both.`;
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --environment us1',
-    '<%= config.bin %> <%= command.id %> --profile "Profile 1"',
-    '<%= config.bin %> <%= command.id %> --username jane.doe --account "Acme Corp"',
-    '<%= config.bin %> <%= command.id %> --no-show_browser',
+    '<%= config.bin %> <%= command.id %> --environment us2 # when Chrome is signed in to several',
   ];
   static override flags = {
-    show_browser: Flags.boolean({
-      char: 's',
-      description: 'show browser window (default is true)',
-      default: true,
-      allowNo: true,
+    username: Flags.string({
+      char: 'u',
+      description: 'username to save if it cannot be detected',
     }),
-    username: Flags.string({ char: 'u', description: 'username' }),
     account: Flags.string({
       char: 'a',
-      description: 'account (if the user has access to multiple accounts)',
+      description: 'account name to save if it cannot be detected',
     }),
     environment: Flags.string({
       char: 'e',
-      description: 'environment',
+      description: 'environment to import (default: the one Chrome is signed in to)',
       options: ['us1', 'us2', 'us3', 'us4', 'gov', 'ca'],
     }),
-    profile: Flags.string({
-      char: 'P',
-      description: 'Chrome profile directory name (default: Default)',
-      default: 'Default',
-    }),
     'chrome-data-dir': Flags.string({
-      description: 'custom Chrome user data directory path',
+      description: 'Chrome user data directory (default: the standard Google Chrome location)',
+    }),
+    timeout: Flags.integer({
+      description: 'seconds to wait for remote debugging to be enabled and approved',
+      default: 120,
+      min: 5,
     }),
   };
   static override aliases: string[] = ['session:import'];
@@ -42,14 +42,11 @@ export default class SessionImport extends Command {
     const { flags } = await this.parse(SessionImport);
 
     await promptImportAndSaveSession({
-      showBrowser: flags.show_browser,
       username: flags.username,
       account: flags.account,
       environment: flags.environment,
-      profile: flags.profile,
       chromeDataDir: flags['chrome-data-dir'],
+      timeoutMs: flags.timeout * 1000,
     });
-
-    this.log('Session saved!');
   }
 }

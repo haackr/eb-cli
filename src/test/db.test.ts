@@ -15,7 +15,9 @@ import {
   deleteSessionById,
   deleteSessionsByUsername,
   resetSequenceIfEmpty,
+  updateSessionIdentity,
 } from '../lib/db.js';
+import Database from 'better-sqlite3';
 
 describe('Database Operations (src/lib/db.ts)', () => {
   let tmpDir: string;
@@ -153,5 +155,39 @@ describe('Database Operations (src/lib/db.ts)', () => {
     assert.doesNotThrow(() => {
       resetSequenceIfEmpty();
     });
+  });
+
+  it('addSession returns the new id and stores the account id', () => {
+    assert.strictEqual(addSession('a@example.com', 'us1', 'A', '[]'), 1);
+    assert.strictEqual(addSession('b@example.com', 'us1', 'B', '[]', 'acct-b'), 2);
+    assert.strictEqual(getSessionById(1)?.account_id, null);
+    assert.strictEqual(getSessionById(2)?.account_id, 'acct-b');
+  });
+
+  it('updateSessionIdentity sets account name and id', () => {
+    addSession('a@example.com', 'us2', '', '[]');
+    updateSessionIdentity(1, 'Acme', 'acct-1');
+    assert.strictEqual(getSessionById(1)?.account, 'Acme');
+    assert.strictEqual(getSessionById(1)?.account_id, 'acct-1');
+  });
+
+  it('migrates a database created before account_id existed', () => {
+    const legacyPath = path.join(tmpDir, 'legacy.db');
+    const legacy = new Database(legacyPath);
+    legacy.exec(`CREATE TABLE sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, environment TEXT, account TEXT,
+      session_cookies TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
+    legacy
+      .prepare(
+        `INSERT INTO sessions (username, environment, account, session_cookies) VALUES (?, ?, ?, ?)`,
+      )
+      .run('old@example.com', 'us1', 'Old', '[]');
+    legacy.close();
+
+    initDb(legacyPath);
+    assert.strictEqual(getSessionById(1)?.account_id, null);
+    assert.strictEqual(addSession('new@example.com', 'us1', 'New', '[]', 'acct-n'), 2);
+    initDb(legacyPath); // idempotent
+    assert.strictEqual(getSessionById(2)?.account_id, 'acct-n');
   });
 });

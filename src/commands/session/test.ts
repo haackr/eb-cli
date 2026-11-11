@@ -4,6 +4,7 @@ import ora from 'ora';
 import * as eb from '../../lib/eb-puppetmaster/index.js';
 import * as db from '../../lib/db.js';
 import type { SessionRow } from '../../lib/db.js';
+import { saveRefreshedSession } from '../../lib/login-helper.js';
 
 export interface SessionTestOutput {
   id: number;
@@ -100,13 +101,7 @@ export default class SessionTest extends Command {
       }
 
       if (check.isLoggedIn) {
-        db.updateSessionById(
-          session.id,
-          session.username,
-          session.environment,
-          session.account,
-          JSON.stringify(check.newCookies),
-        );
+        await saveRefreshedSession(session, check.newCookies);
         spinner?.succeed('Session valid and refreshed');
         results.push({ ...base, valid: true, refreshed: true, reason: check.reason, error: null });
         continue;

@@ -1,7 +1,4 @@
-import puppeteer from 'puppeteer';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import type * as puppeteer from 'puppeteer';
 import { Environment, baseurl, BrowserManager } from './index.js';
 import {
   classifyNavigationError,
@@ -29,21 +26,6 @@ const changePasswordUrl = '/auth/Authenticate/LoginSequence.aspx';
 export type Account = {
   value: string;
   text: string;
-};
-
-export type ImportSessionOptions = {
-  env: Environment;
-  profile?: string | undefined;
-  chromeDataDir?: string | undefined;
-  headless?: boolean | undefined;
-  onAccountSelected?: ((account: Account) => void) | undefined;
-};
-
-export type ImportSessionResult = {
-  cookies: puppeteer.Cookie[];
-  username?: string | undefined;
-  account?: string | undefined;
-  isAlreadyLoggedIn: boolean;
 };
 
 async function getAccounts(accountOptions: puppeteer.ElementHandle[]): Promise<Account[]> {
@@ -146,6 +128,16 @@ async function watchAccountSelection(
   watchedPages.add(page);
 }
 
+/** True when the URL's host is e-Builder (not merely mentioned, e.g. in a redirect parameter). */
+export function isEBuilderHost(rawUrl: string): boolean {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return host === baseurl || host.endsWith(`.${baseurl}`);
+  } catch {
+    return false;
+  }
+}
+
 function isNavigationRace(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -229,7 +221,10 @@ async function waitForEBuilderHome(
   const watchedPages = new WeakSet<puppeteer.Page>();
 
   while (Date.now() < timeoutAt) {
-    for (const openPage of await browser.pages()) {
+    const openPages = browser.connected ? await browser.pages().catch(() => []) : [];
+    // Closing the window disconnects the browser, or (on macOS) leaves Chrome with no pages.
+    if (!browser.connected || openPages.length === 0) throw new LoginWindowClosedError();
+    for (const openPage of openPages) {
       let url: URL;
       try {
         url = new URL(openPage.url());
@@ -679,8 +674,7 @@ async function completeTrimbleIdLogin(
     let lastSubmitTime = 0;
 
     while (Date.now() < mfaTimeout) {
-      const currentUrl = authPage.url();
-      if (currentUrl.includes('e-builder.net')) {
+      if (isEBuilderHost(authPage.url())) {
         break;
       }
 
@@ -1069,39 +1063,96 @@ export async function login(
   return cookies;
 }
 
+export class LoginWindowClosedError extends Error {
+  constructor() {
+    super('The login window was closed before sign-in finished.');
+    this.name = 'LoginWindowClosedError';
+  }
+}
+
+export type BrowserLoginOptions = {
+  /** Where to start (default: the environment's e-Builder login page). */
+  startUrl?: string | undefined;
+  /** Account to pick automatically if e-Builder shows the account selection page. */
+  account?: string | undefined;
+  /** Called with the account the user picks on the account selection page. */
+  onAccountSelected?: ((account: Account) => void) | undefined;
+  browser?: puppeteer.Browser | undefined;
+};
+
+export type BrowserLoginResult = {
+  cookies: puppeteer.Cookie[];
+  /** Environment of the page the user landed on (may differ from the one requested). */
+  env: Environment;
+};
+
+function environmentOfUrl(rawUrl: string): Environment | undefined {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    if (!host.endsWith(`.${baseurl}`)) return undefined;
+    const sub = host.slice(0, -(baseurl.length + 1));
+    return (Object.values(Environment) as string[]).includes(sub)
+      ? (sub as Environment)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Opens a visible Chrome window (fresh temporary profile) at the e-Builder login page and lets
+ * the user sign in however they normally do: password, passkey, MFA, or SSO. Nothing on the
+ * page is automated. Returns the cookies as soon as an authenticated e-Builder page loads.
+ */
+export async function loginInBrowser(
+  env: Environment,
+  options: BrowserLoginOptions = {},
+): Promise<BrowserLoginResult> {
+  let startUrl = `https://${env}.${baseurl}/auth/www/index.aspx?ReturnUrl=%2f`;
+  if (options.startUrl) {
+    let url: URL;
+    try {
+      url = new URL(options.startUrl);
+    } catch {
+      throw new Error('SSO URL must be an absolute URL.');
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new Error('SSO URL must use HTTP or HTTPS.');
+    }
+    startUrl = url.href;
+  }
+
+  const browser =
+    options.browser ??
+    (await BrowserManager.getInstance().getBrowser(false, ['--window-size=1200,800'], true));
+
+  try {
+    const [page] = await browser.pages();
+    if (!page) throw new Error('No page found');
+    page.setDefaultNavigationTimeout(90_000);
+    page.setDefaultTimeout(90_000);
+
+    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+
+    const home = await waitForEBuilderHome(
+      browser,
+      env,
+      options.onAccountSelected,
+      options.account,
+    );
+    return { cookies: await browser.cookies(), env: environmentOfUrl(home.url()) ?? env };
+  } catch (err) {
+    if (!browser.connected) throw new LoginWindowClosedError();
+    throw err;
+  }
+}
+
 export async function loginWithSso(
   env: Environment,
   ssoUrl: string,
   browser?: puppeteer.Browser,
 ): Promise<puppeteer.Cookie[]> {
-  let url: URL;
-  try {
-    url = new URL(ssoUrl);
-  } catch {
-    throw new Error('SSO URL must be an absolute URL.');
-  }
-
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error('SSO URL must use HTTP or HTTPS.');
-  }
-
-  if (!browser) {
-    browser = await BrowserManager.getInstance().getBrowser(
-      false,
-      ['--window-size=1200,800'],
-      true,
-    );
-  }
-
-  const [page] = await browser.pages();
-  if (!page) throw new Error('No page found');
-  page.setDefaultNavigationTimeout(90_000);
-  page.setDefaultTimeout(90_000);
-
-  await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-
-  await waitForEBuilderHome(browser, env);
-  return await browser.cookies();
+  return (await loginInBrowser(env, { startUrl: ssoUrl, browser })).cookies;
 }
 
 /**
@@ -1222,249 +1273,4 @@ export async function logout(
 
   // Close the context to clean up
   await context.close();
-}
-
-export function getDefaultChromeDataDir(): string {
-  if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome');
-  }
-  if (process.platform === 'win32') {
-    const localAppData = process.env['LOCALAPPDATA'] || path.join(os.homedir(), 'AppData', 'Local');
-    return path.join(localAppData, 'Google', 'Chrome', 'User Data');
-  }
-  const configHome = process.env['XDG_CONFIG_HOME'] || path.join(os.homedir(), '.config');
-  const googleChrome = path.join(configHome, 'google-chrome');
-  if (fs.existsSync(googleChrome)) {
-    return googleChrome;
-  }
-  return path.join(configHome, 'chromium');
-}
-
-export function copyChromeProfileForImport(
-  chromeDataDir: string,
-  profileName: string,
-  destDir: string,
-): void {
-  const profileSrc = path.join(chromeDataDir, profileName);
-  const profileDest = path.join(destDir, profileName);
-
-  if (!fs.existsSync(profileSrc)) {
-    throw new Error(`Chrome profile directory not found: ${profileSrc}`);
-  }
-
-  fs.mkdirSync(profileDest, { recursive: true });
-
-  const rootFiles = [
-    'Cookies',
-    'Cookies-journal',
-    'Preferences',
-    'Secure Preferences',
-    'Login Data',
-    'Login Data-journal',
-    'Web Data',
-    'Web Data-journal',
-  ];
-
-  for (const file of rootFiles) {
-    const srcFile = path.join(profileSrc, file);
-    if (fs.existsSync(srcFile)) {
-      try {
-        fs.copyFileSync(srcFile, path.join(profileDest, file));
-      } catch {}
-    }
-  }
-
-  const dirsToCopy = [
-    'Network',
-    'Local Storage',
-    'Session Storage',
-    'IndexedDB',
-    'Extensions',
-    'Extension State',
-    'Extension Rules',
-    'Local Extension Settings',
-    'Sync Extension Settings',
-  ];
-  for (const dir of dirsToCopy) {
-    const srcSubDir = path.join(profileSrc, dir);
-    if (fs.existsSync(srcSubDir)) {
-      const destSubDir = path.join(profileDest, dir);
-      try {
-        fs.cpSync(srcSubDir, destSubDir, { recursive: true, force: true });
-      } catch {}
-    }
-  }
-
-  const localStateSrc = path.join(chromeDataDir, 'Local State');
-  if (fs.existsSync(localStateSrc)) {
-    try {
-      fs.copyFileSync(localStateSrc, path.join(destDir, 'Local State'));
-    } catch {}
-  }
-}
-
-export async function extractUserInfoFromPage(
-  page: puppeteer.Page,
-): Promise<{ username?: string | undefined; account?: string | undefined }> {
-  try {
-    return await page.evaluate(() => {
-      let username: string | undefined;
-      let account: string | undefined;
-
-      const userSelectors = [
-        '#ctl00_ucTopNav2_lblUserName',
-        '#ctl00_ucTopNav_lblUserName',
-        '#ctl00_lblUserName',
-        '#ctl00_ucTopNav2_hypUser',
-        '#ctl00_ucTopNav_hypUser',
-        '#ctl00_ucTopNav2_lnkUser',
-        '#ctl00_ucTopNav_lnkUser',
-        '.user-name',
-        '.username',
-      ];
-      for (const sel of userSelectors) {
-        const el = document.querySelector(sel);
-        const text = el?.textContent?.trim();
-        if (text) {
-          username = text;
-          break;
-        }
-      }
-
-      const accountSelectors = [
-        '#ctl00_ucTopNav2_lblAccountName',
-        '#ctl00_ucTopNav_lblAccountName',
-        '#ctl00_lblAccountName',
-        '#ctl00_lblAccount',
-        '#ctl00_ucTopNav2_lblAccount',
-        '#ctl00_ucTopNav_lblAccount',
-        '.account-name',
-      ];
-      for (const sel of accountSelectors) {
-        const el = document.querySelector(sel);
-        const text = el?.textContent?.trim();
-        if (text) {
-          account = text;
-          break;
-        }
-      }
-
-      if (!account) {
-        const accountSelect = document.querySelector(
-          '#ctl00_ucTopNav2_ddlAccounts, #ctl00_ucTopNav_ddlAccounts, select[name*="ddlAccounts"]',
-        ) as HTMLSelectElement | null;
-        if (accountSelect && accountSelect.selectedOptions?.length > 0) {
-          const selectedText = accountSelect.selectedOptions[0]?.textContent?.trim();
-          if (selectedText) {
-            account = selectedText;
-          }
-        }
-      }
-
-      return { username, account };
-    });
-  } catch {
-    return {};
-  }
-}
-
-export async function importSessionFromChrome(
-  options: ImportSessionOptions,
-): Promise<ImportSessionResult> {
-  const {
-    env,
-    profile = 'Default',
-    chromeDataDir = getDefaultChromeDataDir(),
-    headless = false,
-    onAccountSelected,
-  } = options;
-
-  if (!fs.existsSync(chromeDataDir)) {
-    throw new Error(`Google Chrome user data directory not found at: ${chromeDataDir}`);
-  }
-
-  const profileDir = path.join(chromeDataDir, profile);
-  if (!fs.existsSync(profileDir)) {
-    const availableProfiles = fs
-      .readdirSync(chromeDataDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && (d.name === 'Default' || d.name.startsWith('Profile ')))
-      .map((d) => d.name);
-    throw new Error(
-      `Chrome profile '${profile}' not found at: ${profileDir}.${
-        availableProfiles.length > 0 ? ` Available profiles: ${availableProfiles.join(', ')}` : ''
-      }`,
-    );
-  }
-
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eb-chrome-import-'));
-
-  let browser: puppeteer.Browser | undefined;
-  try {
-    copyChromeProfileForImport(chromeDataDir, profile, tmpDir);
-
-    const launchArgs = [
-      `--user-data-dir=${tmpDir}`,
-      `--profile-directory=${profile}`,
-      '--new-window',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-blink-features=AutomationControlled',
-      '--start-maximized',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--window-size=1200,800',
-    ];
-
-    browser = await puppeteer.launch({
-      headless,
-      channel: 'chrome',
-      ignoreDefaultArgs: ['--enable-automation', '--disable-extensions'],
-      args: launchArgs,
-    });
-
-    const [page] = await browser.pages();
-    if (!page) throw new Error('No browser page found.');
-
-    page.setDefaultNavigationTimeout(90_000);
-    page.setDefaultTimeout(90_000);
-
-    const targetUrl = `https://${env}.${baseurl}/da2/Home/index2.aspx`;
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-
-    let authenticatedPage: puppeteer.Page | undefined;
-    const isAlreadyLoggedIn = await isEBuilderPageAuthenticated(page, env);
-
-    if (isAlreadyLoggedIn) {
-      authenticatedPage = page;
-    } else {
-      if (headless) {
-        throw new Error(
-          `No active e-Builder session found in Chrome profile '${profile}' for environment '${env}'. Run without --no-show_browser to log in interactively.`,
-        );
-      }
-
-      authenticatedPage = await waitForEBuilderHome(browser, env, onAccountSelected);
-    }
-
-    const userInfo = await extractUserInfoFromPage(authenticatedPage || page);
-    const cookies = await browser.cookies();
-
-    return {
-      cookies,
-      username: userInfo.username,
-      account: userInfo.account,
-      isAlreadyLoggedIn,
-    };
-  } finally {
-    if (browser) {
-      try {
-        await browser.close();
-      } catch {}
-    }
-    try {
-      if (fs.existsSync(tmpDir)) {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
-    } catch {}
-  }
 }

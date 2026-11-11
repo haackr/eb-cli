@@ -4,7 +4,15 @@ import * as eb from './eb-puppetmaster/index.js';
 import * as db from './db.js';
 import type { Account } from './eb-puppetmaster/index.js';
 
-interface LoginOptions {
+export type LoginMode = 'browser' | 'sso' | 'credentials';
+
+export interface LoginOptions {
+  /**
+   * Sign in yourself in a browser window (no automation). Default: true unless a password or
+   * credential provider is given. Ignored with `ssoUrl`, which always uses the browser.
+   */
+  browser?: boolean | undefined;
+  /** Credentials mode only: keep the automated login browser visible. */
   showBrowser?: boolean;
   username?: string;
   password?: string;
@@ -14,74 +22,201 @@ interface LoginOptions {
   getTotp?: () => Promise<string | undefined>;
 }
 
-export async function promptLoginAndSaveSession(options: LoginOptions = {}): Promise<void> {
-  let environment = options.environment;
-  if (!environment) {
-    environment = await select({
-      message: 'Select the e-Builder environment you want to log in to:',
-      choices: [
-        { value: 'us1', name: 'US-1' },
-        { value: 'us2', name: 'US-2' },
-        { value: 'us3', name: 'US-3' },
-        { value: 'us4', name: 'US-4' },
-        { value: 'gov', name: 'GOV' },
-        { value: 'ca', name: 'CA' },
-      ],
-    });
+const ENVIRONMENT_CHOICES = [
+  { value: 'us1', name: 'US-1' },
+  { value: 'us2', name: 'US-2' },
+  { value: 'us3', name: 'US-3' },
+  { value: 'us4', name: 'US-4' },
+  { value: 'gov', name: 'GOV' },
+  { value: 'ca', name: 'CA' },
+];
+
+/** Returns the environment for a short name (`us1`…), prompting when none was given. */
+async function resolveEnvironment(shortEnv: string | undefined, message: string) {
+  const chosen = shortEnv ?? (await select({ message, choices: ENVIRONMENT_CHOICES }));
+  return eb.getEnvironment(chosen);
+}
+
+function isInteractive(): boolean {
+  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+export class SessionVerificationError extends Error {
+  constructor(
+    message: string,
+    readonly check: eb.SessionCheckResult,
+  ) {
+    super(message);
+    this.name = 'SessionVerificationError';
+  }
+}
+
+export interface SessionHints {
+  /** Username the caller already knows (flag, credential manager, typed in). */
+  username?: string | undefined;
+  /** Account name the caller already knows (flag, account-selection dropdown). */
+  account?: string | undefined;
+}
+
+export interface FinalizeOptions {
+  /** Run the verification browser headless (default true). */
+  headless?: boolean | undefined;
+  /** Allow prompting for anything that could not be detected (default: when on a TTY). */
+  interactive?: boolean | undefined;
+  /** Injection point for tests. */
+  identify?: typeof eb.identifySession | undefined;
+}
+
+export interface FinalizedSession {
+  sessionId: number;
+  username: string;
+  account: string;
+  accountId: string | null;
+  /** True when a stored session for the same e-Builder login was updated in place. */
+  updatedExisting: boolean;
+}
+
+/**
+ * The single place every login method ends: verifies the cookies, identifies the user and
+ * account from e-Builder itself, fills gaps from `hints` (then prompts, if allowed), and saves
+ * the session as a new row, unless a stored row already holds this same login (then that row
+ * is updated). Throws SessionVerificationError when the cookies are not authenticated.
+ */
+export async function finalizeSession(
+  env: eb.Environment,
+  cookies: any[],
+  hints: SessionHints = {},
+  options: FinalizeOptions = {},
+): Promise<FinalizedSession> {
+  const headless = options.headless ?? true;
+  const interactive = options.interactive ?? isInteractive();
+  const identify = options.identify ?? eb.identifySession;
+
+  const check = await eb.isLoggedIn(env, headless, cookies);
+  if (!check.isLoggedIn) {
+    throw new SessionVerificationError(
+      eb.sessionCheckErrorFor(check, `https://${env}.${eb.baseurl}`).message,
+      check,
+    );
+  }
+  const savedCookies = check.newCookies.length > 0 ? check.newCookies : cookies;
+  const identity = await identify(env, savedCookies);
+
+  let username = identity.username || hints.username?.trim() || '';
+  if (!username) {
+    if (!interactive) {
+      throw new Error('Could not detect the username for this session; pass --username.');
+    }
+    username = (await input({ message: 'Enter your username for this session:' })).trim();
   }
 
-  let env: eb.Environment;
-  switch (environment) {
-    case 'us1':
-      env = eb.Environment.US1;
-      break;
-    case 'us2':
-      env = eb.Environment.US2;
-      break;
-    case 'us3':
-      env = eb.Environment.US3;
-      break;
-    case 'us4':
-      env = eb.Environment.US4;
-      break;
-    case 'gov':
-      env = eb.Environment.GOV;
-      break;
-    case 'ca':
-      env = eb.Environment.CA;
-      break;
-    default:
-      throw new Error(`Unknown environment: ${environment}`);
+  let account = identity.accountName || hints.account?.trim() || '';
+  if (!account && interactive) {
+    account = (
+      await input({ message: 'Enter account name (leave empty if none):', default: '' })
+    ).trim();
   }
+  const accountId = identity.accountId ?? null;
+
+  const shortEnv = eb.getShortEnv(env);
+  const cookieJson = JSON.stringify(savedCookies);
+  const existing = findSameLogin(env, [cookies, savedCookies]);
+
+  let sessionId: number;
+  if (existing) {
+    sessionId = existing.id;
+    db.updateSessionById(sessionId, username, shortEnv, account, cookieJson);
+    db.updateSessionIdentity(sessionId, account, accountId ?? existing.account_id);
+  } else {
+    sessionId = db.addSession(username, shortEnv, account, cookieJson, accountId);
+  }
+
+  return { sessionId, username, account, accountId, updatedExisting: Boolean(existing) };
+}
+
+/**
+ * The stored session holding the same e-Builder login (same ASP.NET session id), if any.
+ * Only that case is updated in place: a *different* login always gets its own row, because
+ * overwriting it would orphan a live server session that could then never be logged out (and
+ * e-Builder caps concurrent sessions per user).
+ */
+function findSameLogin(env: eb.Environment, cookieSets: any[][]): db.SessionRow | undefined {
+  const ids = new Set(
+    cookieSets.map((c) => eb.getServerSessionId(env, c)).filter((v): v is string => Boolean(v)),
+  );
+  if (ids.size === 0) return undefined;
+  const shortEnv = eb.getShortEnv(env);
+  return db
+    .getSessions()
+    .filter((s) => s.environment === shortEnv)
+    .find((s) => {
+      try {
+        const sid = eb.getServerSessionId(env, JSON.parse(s.session_cookies));
+        return sid !== undefined && ids.has(sid);
+      } catch {
+        return false;
+      }
+    });
+}
+
+/**
+ * Persists refreshed cookies for a stored session and, when its account name or account ID is
+ * missing, fills them in from e-Builder. Never throws for identity lookups.
+ */
+export async function saveRefreshedSession(
+  session: Pick<db.SessionRow, 'id' | 'environment' | 'account' | 'account_id'>,
+  newCookies: any[],
+  identify: typeof eb.identifySession = eb.identifySession,
+): Promise<void> {
+  db.updateSessionCookies(session.id, JSON.stringify(newCookies));
+  if ((session.account ?? '').trim() && session.account_id) return;
+  try {
+    const identity = await identify(eb.getEnvironment(session.environment), newCookies);
+    const account = (session.account ?? '').trim() || identity.accountName || '';
+    const accountId = session.account_id || identity.accountId || null;
+    if (account !== (session.account ?? '') || accountId !== session.account_id) {
+      db.updateSessionIdentity(session.id, account, accountId);
+    }
+  } catch {
+    // Identity backfill is best-effort.
+  }
+}
+
+/** Which login flow `eb login` runs for these options. */
+export function chooseLoginMode(options: LoginOptions): LoginMode {
+  if (options.ssoUrl) return 'sso';
+  if (options.browser !== undefined) return options.browser ? 'browser' : 'credentials';
+  return options.password || options.getTotp ? 'credentials' : 'browser';
+}
+
+export async function promptLoginAndSaveSession(
+  options: LoginOptions = {},
+): Promise<FinalizedSession> {
+  let env = await resolveEnvironment(
+    options.environment,
+    'Select the e-Builder environment you want to log in to:',
+  );
+  const mode = chooseLoginMode(options);
 
   let username = options.username;
-  if (!username) {
-    username = await input({
-      message: 'Enter your username:',
-    });
-  }
-
-  const usingSso = Boolean(options.ssoUrl);
   let pass = options.password;
-  if (!usingSso && !pass) {
-    pass = await password({ message: 'Enter your password:', mask: '*' });
+  if (mode === 'credentials') {
+    if (!username) username = await input({ message: 'Enter your username:' });
+    if (!pass) pass = await password({ message: 'Enter your password:', mask: '*' });
   }
 
-  const spinner = ora(
-    usingSso || options.showBrowser
-      ? 'Waiting for interactive login in the browser...'
-      : 'Logging in to e-Builder...',
-  ).start();
+  const spinner = ora();
+  const onAccountSelected = (selectedAccount: Account) => {
+    options.account = selectedAccount.text;
+  };
   let cookies;
   try {
-    if (options.ssoUrl) {
-      spinner.info('Complete your SSO login in the browser window.');
-      spinner.start('Waiting for SSO login in the browser...');
-      cookies = await eb.loginWithSso(env, options.ssoUrl);
-    } else {
+    if (mode === 'credentials') {
       if (options.showBrowser) {
         spinner.info('Complete Trimble ID authentication in the browser if prompted.');
         spinner.start('Waiting for interactive login in the browser...');
+      } else {
+        spinner.start('Logging in to e-Builder...');
       }
       cookies = await eb.login(
         env,
@@ -95,37 +230,68 @@ export async function promptLoginAndSaveSession(options: LoginOptions = {}): Pro
           return selectedAccount.value;
         },
         undefined,
-        (selectedAccount: Account) => {
-          options.account = selectedAccount.text;
-        },
+        onAccountSelected,
         options.getTotp,
       );
+    } else {
+      spinner.start(
+        mode === 'sso'
+          ? 'Complete your SSO sign-in in the browser window...'
+          : 'Sign in to e-Builder in the browser window...',
+      );
+      const result = await eb.loginInBrowser(env, {
+        startUrl: options.ssoUrl,
+        account: options.account,
+        onAccountSelected,
+      });
+      cookies = result.cookies;
+      env = result.env;
+      // Done with the window as soon as the session is captured.
+      await eb.BrowserManager.getInstance().closeBrowser();
     }
   } catch (e: any) {
     spinner.fail(`Failed to log in: ${e.message}`);
-    if (e.stack) {
+    if (e.stack && !(e instanceof eb.LoginWindowClosedError)) {
       console.error(e.stack);
     }
+    await eb.BrowserManager.getInstance()
+      .closeBrowser()
+      .catch(() => {});
     throw e;
   }
 
-  const loginCheck = await eb.isLoggedIn(env, !options.showBrowser, cookies);
-  if (!loginCheck.isLoggedIn) {
-    spinner.fail('Failed to verify login.');
-    await eb.logout(env, !options.showBrowser, cookies);
-    throw new Error('Login verification failed');
+  // No spinner while finalizing: it may prompt for missing details.
+  spinner.stop();
+  let saved: FinalizedSession;
+  try {
+    saved = await finalizeSession(
+      env,
+      cookies,
+      { username, account: options.account },
+      { headless: mode !== 'credentials' || !options.showBrowser },
+    );
+  } catch (e) {
+    if (e instanceof SessionVerificationError) {
+      spinner.fail('Failed to verify login.');
+      await eb.logout(env, true, cookies).catch(() => {});
+      throw new Error('Login verification failed');
+    }
+    throw e;
+  } finally {
+    // Close the browser to allow the process to exit
+    await eb.BrowserManager.getInstance().closeBrowser();
   }
 
-  spinner.succeed('Logged in successfully!');
-  db.addSession(
-    username,
-    eb.getShortEnv(env),
-    options.account || '',
-    JSON.stringify(loginCheck.newCookies),
-  );
+  spinner.succeed(describeSaved('Logged in successfully', saved));
+  return saved;
+}
 
-  // Close the browser to allow the process to exit
-  await eb.BrowserManager.getInstance().closeBrowser();
+function describeSaved(prefix: string, saved: FinalizedSession): string {
+  const who = saved.account ? `${saved.username} (${saved.account})` : saved.username;
+  const what = saved.updatedExisting
+    ? `updated session ${saved.sessionId}`
+    : `session ${saved.sessionId}`;
+  return `${prefix}: ${who}, ${what}.`;
 }
 
 async function accountSpecifier(accounts: eb.Account[]): Promise<Account> {
@@ -151,8 +317,7 @@ export async function refreshSessionIfNeeded(
   sessionId: number,
   headless: boolean = true,
 ): Promise<eb.SessionCheckResult> {
-  const session = db.getSessionById(sessionId) as
-    { environment: string; session_cookies: string } | undefined;
+  const session = db.getSessionById(sessionId);
   if (!session) {
     return {
       isLoggedIn: false,
@@ -168,7 +333,7 @@ export async function refreshSessionIfNeeded(
 
     const loginCheck = await eb.isLoggedIn(env, headless, cookies);
     if (loginCheck.isLoggedIn) {
-      db.updateSessionCookies(sessionId, JSON.stringify(loginCheck.newCookies));
+      await saveRefreshedSession(session, loginCheck.newCookies);
     }
     return loginCheck;
   } catch (err) {
@@ -182,109 +347,111 @@ export async function refreshSessionIfNeeded(
 }
 
 export interface ImportOptions {
-  showBrowser?: boolean | undefined;
   username?: string | undefined;
   account?: string | undefined;
   environment?: string | undefined;
-  profile?: string | undefined;
   chromeDataDir?: string | undefined;
+  /** How long to wait for remote debugging to be enabled and approved (default 2 minutes). */
+  timeoutMs?: number | undefined;
+  /** Injection point for tests. */
+  readCookies?: typeof eb.readChromeCookies | undefined;
+  /** Passed through to finalizeSession. */
+  finalize?: FinalizeOptions | undefined;
 }
 
-export async function promptImportAndSaveSession(options: ImportOptions = {}): Promise<void> {
-  let environment = options.environment;
-  if (!environment) {
-    environment = await select({
-      message: 'Select the e-Builder environment you want to import the session from:',
-      choices: [
-        { value: 'us1', name: 'US-1' },
-        { value: 'us2', name: 'US-2' },
-        { value: 'us3', name: 'US-3' },
-        { value: 'us4', name: 'US-4' },
-        { value: 'gov', name: 'GOV' },
-        { value: 'ca', name: 'CA' },
-      ],
-    });
+/** Picks the environment to import from the ones Chrome has a session for. */
+async function chooseImportEnvironment(
+  detected: eb.Environment[],
+  requested: string | undefined,
+  interactive: boolean,
+): Promise<eb.Environment> {
+  const label = (env: eb.Environment) => eb.getDisplayName(eb.getShortEnv(env));
+  if (requested) {
+    const env = eb.getEnvironment(requested);
+    if (!detected.includes(env)) {
+      throw new Error(
+        `Chrome has no e-Builder session for ${label(env)}.${
+          detected.length ? ` Found: ${detected.map(label).join(', ')}.` : ''
+        } Sign in to ${label(env)} in Chrome first.`,
+      );
+    }
+    return env;
   }
-
-  let env: eb.Environment;
-  switch (environment) {
-    case 'us1':
-      env = eb.Environment.US1;
-      break;
-    case 'us2':
-      env = eb.Environment.US2;
-      break;
-    case 'us3':
-      env = eb.Environment.US3;
-      break;
-    case 'us4':
-      env = eb.Environment.US4;
-      break;
-    case 'gov':
-      env = eb.Environment.GOV;
-      break;
-    case 'ca':
-      env = eb.Environment.CA;
-      break;
-    default:
-      throw new Error(`Unknown environment: ${environment}`);
+  if (detected.length === 0) {
+    throw new Error(
+      'Chrome has no signed-in e-Builder session. Sign in to e-Builder in Chrome, then run this again.',
+    );
   }
+  if (detected.length === 1) return detected[0]!;
+  if (!interactive) {
+    throw new Error(
+      `Chrome is signed in to several e-Builder environments (${detected.map(label).join(', ')}); pass --environment.`,
+    );
+  }
+  return await select({
+    message: 'Chrome is signed in to several environments. Which one do you want to import?',
+    choices: detected.map((env) => ({ value: env, name: label(env) })),
+  });
+}
 
-  const showBrowser = options.showBrowser ?? true;
-  const spinner = ora('Importing session from Google Chrome...').start();
+/**
+ * Imports the e-Builder session from the user's running Google Chrome (remote debugging must be
+ * allowed at chrome://inspect/#remote-debugging; Chrome asks the user to approve the connection).
+ */
+export async function promptImportAndSaveSession(
+  options: ImportOptions = {},
+): Promise<FinalizedSession> {
+  if (options.environment) eb.getEnvironment(options.environment); // validate early
+  const readCookies = options.readCookies ?? eb.readChromeCookies;
+  const interactive = options.finalize?.interactive ?? isInteractive();
 
-  let importResult: eb.ImportSessionResult;
+  const spinner = ora('Connecting to Google Chrome...').start();
+  let cookies: Awaited<ReturnType<typeof eb.readChromeCookies>>;
   try {
-    importResult = await eb.importSessionFromChrome({
-      env,
-      profile: options.profile,
+    cookies = await readCookies({
       chromeDataDir: options.chromeDataDir,
-      headless: !showBrowser,
-      onAccountSelected: (selectedAccount: eb.Account) => {
-        if (!options.account) {
-          options.account = selectedAccount.text;
-        }
+      timeoutMs: options.timeoutMs,
+      onNeedsSetup: () => {
+        spinner.info(
+          `Remote debugging is not enabled in Chrome. In Chrome, open ${eb.REMOTE_DEBUGGING_SETTINGS_URL} and turn on "Allow remote debugging for this browser instance".`,
+        );
+        if (interactive) eb.openRemoteDebuggingSettings();
+        spinner.start('Waiting for remote debugging to be enabled...');
+      },
+      onAwaitingApproval: () => {
+        spinner.text = 'Click "Allow" in Chrome to let eb read your e-Builder session...';
       },
     });
   } catch (e: any) {
     spinner.fail(`Failed to import session from Chrome: ${e.message}`);
     throw e;
   }
+  spinner.stop();
 
-  spinner.start('Verifying imported session...');
-  const loginCheck = await eb.isLoggedIn(env, true, importResult.cookies);
-  if (!loginCheck.isLoggedIn) {
-    spinner.fail('Failed to verify imported session.');
-    throw new Error('Login verification failed for imported session.');
-  }
-
-  spinner.succeed(
-    importResult.isAlreadyLoggedIn
-      ? 'Active Chrome session detected and imported!'
-      : 'Logged in and session imported!',
+  const env = await chooseImportEnvironment(
+    eb.detectEnvironments(cookies),
+    options.environment,
+    interactive,
   );
 
-  let username = options.username || importResult.username;
-  if (!username) {
-    username = await input({
-      message: 'Enter your username for this session:',
-    });
+  let saved: FinalizedSession;
+  try {
+    saved = await finalizeSession(
+      env,
+      eb.cookiesForEnvironment(env, cookies),
+      { username: options.username, account: options.account },
+      options.finalize,
+    );
+  } catch (e) {
+    if (e instanceof SessionVerificationError) {
+      ora().fail('The e-Builder session in Chrome is no longer valid. Sign in again in Chrome.');
+      throw new Error('Login verification failed for imported session.');
+    }
+    throw e;
+  } finally {
+    await eb.BrowserManager.getInstance().closeBrowser();
   }
 
-  let account = options.account || importResult.account || '';
-  if (!account && options.account === undefined) {
-    account = await input({
-      message: 'Enter account name (leave empty if none):',
-      default: '',
-    });
-  }
-
-  const savedCookies =
-    loginCheck.newCookies && loginCheck.newCookies.length > 0
-      ? loginCheck.newCookies
-      : importResult.cookies;
-
-  db.addSession(username, eb.getShortEnv(env), account, JSON.stringify(savedCookies));
-
-  await eb.BrowserManager.getInstance().closeBrowser();
+  ora().succeed(describeSaved('Imported Chrome session', saved));
+  return saved;
 }

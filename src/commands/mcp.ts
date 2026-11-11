@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import * as eb from '../lib/eb-puppetmaster/index.js';
 import * as db from '../lib/db.js';
+import { saveRefreshedSession } from '../lib/login-helper.js';
 import { STANDARD_PATHS } from './agent/guide.js';
 import * as pi from '../lib/eb-puppetmaster/process-instance.js';
 
@@ -88,13 +89,7 @@ export default class McpCommand extends Command {
           }
 
           if (check.isLoggedIn) {
-            db.updateSessionById(
-              session.id,
-              session.username,
-              session.environment,
-              session.account,
-              JSON.stringify(check.newCookies),
-            );
+            await saveRefreshedSession(session, check.newCookies);
             results.push({
               ...base,
               valid: true,

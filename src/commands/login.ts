@@ -2,16 +2,26 @@ import { Command, Flags } from '@oclif/core';
 import { promptLoginAndSaveSession } from '../lib/login-helper.js';
 
 export default class Login extends Command {
-  static override description = 'log in to e-Builder';
+  static override description = `log in to e-Builder
+
+With no password or credential provider, eb opens a browser window: sign in the way you normally do (password, passkey, MFA, SSO) and the session is saved as soon as e-Builder loads. With --provider (or --password), eb signs in for you headlessly. The username and account are detected from e-Builder either way.`;
   static override examples = [
-    '<%= config.bin %> <%= command.id %>',
-    '<%= config.bin %> <%= command.id %> --show_browser # keep browser visible during login',
-    '<%= config.bin %> <%= command.id %> --username jane.doe --environment us1 --sso-url https://idp.example.com/ebuilder',
+    '<%= config.bin %> <%= command.id %> # sign in yourself in a browser window',
+    '<%= config.bin %> <%= command.id %> --environment us2',
+    '<%= config.bin %> <%= command.id %> --provider 1password --item "e-Builder" # automated',
+    '<%= config.bin %> <%= command.id %> --no-browser # type username/password in the terminal',
+    '<%= config.bin %> <%= command.id %> --sso-url https://idp.example.com/ebuilder',
   ];
   static override flags = {
+    browser: Flags.boolean({
+      char: 'b',
+      allowNo: true,
+      description:
+        'sign in yourself in a browser window (default when no password or --provider is given); --no-browser prompts for username/password in the terminal instead',
+    }),
     show_browser: Flags.boolean({
       char: 's',
-      description: 'show browser window (useful for debugging; default is headless)',
+      description: 'automated login only: show the browser window (useful for debugging)',
     }),
     username: Flags.string({ char: 'u', description: 'username' }),
     password: Flags.string({ char: 'p', description: 'password' }),
@@ -45,6 +55,7 @@ export default class Login extends Command {
     const { flags } = await this.parse(Login);
 
     const options: {
+      browser?: boolean;
       showBrowser?: boolean;
       username?: string;
       password?: string;
@@ -53,6 +64,7 @@ export default class Login extends Command {
       ssoUrl?: string;
       getTotp?: () => Promise<string | undefined>;
     } = {};
+    if (flags.browser !== undefined) options.browser = flags.browser;
     if (flags.show_browser !== undefined) options.showBrowser = flags.show_browser;
     if (flags.username) options.username = flags.username;
     if (flags.password) options.password = flags.password;
@@ -83,17 +95,11 @@ export default class Login extends Command {
       };
     }
 
-    await promptLoginAndSaveSession(options);
+    const saved = await promptLoginAndSaveSession(options);
 
     if (flags.provider && itemRef) {
       const db = await import('../lib/db.js');
-      const allSessions = db.getSessions();
-      if (allSessions.length > 0) {
-        const latest = [...allSessions].sort((a, b) => b.id - a.id)[0]!;
-        db.setCredentialRef(latest.id, flags.provider, itemRef, flags.vault);
-      }
+      db.setCredentialRef(saved.sessionId, flags.provider, itemRef, flags.vault);
     }
-
-    this.log(`Session saved!`);
   }
 }
