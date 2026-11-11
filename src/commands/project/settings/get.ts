@@ -20,8 +20,7 @@ export default class ProjectSettingsGet extends BaseSessionCommand {
   static override enableJsonFlag = true;
   static override args = {
     project: Args.string({
-      description:
-        'Exact project name (case-insensitive) or PortalID GUID; hidden projects need the PortalID',
+      description: 'Exact project name (case-insensitive) or PortalID GUID',
       required: true,
     }),
   };

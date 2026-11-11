@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import puppeteer from 'puppeteer';
 import {
   getPortalIdByProjectName,
+  getPortalIdByProjectNameAtOrigin,
   clearProjectCache,
   Environment,
   BrowserManager,
@@ -91,6 +92,22 @@ describe('Project Scraping & Cache (src/lib/eb-puppetmaster/project.ts)', () => 
 
     const id2 = await getPortalIdByProjectName(page, Environment.US1, 'cached project');
     assert.strictEqual(id2, 'CACHED-999');
+  });
+
+  it('refuses a name shared by several projects', async () => {
+    await page.setContent(`
+      <html><body><table>
+        <tr class="RowData"><td>1</td><td>Active</td><td><a href="?PortalID={DUP-1}">Same Name</a></td></tr>
+        <tr class="AltRowData"><td>2</td><td>Hidden</td><td><a href="?PortalID={DUP-2}">same name</a></td></tr>
+      </table></body></html>
+    `);
+    page.goto = async () => null as any;
+
+    await assert.rejects(
+      async () =>
+        getPortalIdByProjectNameAtOrigin(page, 'https://app-us2.e-builder.net', 'Same Name'),
+      /Several projects are named 'Same Name'; pass the PortalID instead \(DUP-1, DUP-2\)/,
+    );
   });
 
   it('throws error when project is not found on page', async () => {

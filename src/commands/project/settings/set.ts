@@ -63,7 +63,7 @@ Values: access visible|hidden; yes/no for the yes/no settings; whole-hour times 
   static override args = {
     project: Args.string({
       description:
-        'Exact project name (case-insensitive) or PortalID GUID; hidden projects need the PortalID. Omit when using --file.',
+        'Exact project name (case-insensitive) or PortalID GUID. Omit when using --file.',
       required: false,
     }),
   };

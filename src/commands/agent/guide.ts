@@ -120,7 +120,7 @@ export default class AgentGuide extends Command {
               'Batch: a "project" column plus one column per setting; blank cells are unchanged. All rows are validated before any save.',
           },
           rules: [
-            '<project> is an exact project name (case-insensitive) or PortalID. Hidden projects are not listed by name, so use the PortalID for them (and after setting --access hidden).',
+            '<project> is an exact project name (case-insensitive) or PortalID.',
             'Saving posts the whole Project Details form; a project with invalid required details fields fails to save and the error is reported.',
           ],
         },
@@ -235,7 +235,7 @@ eb project settings get "Project X" --json
 eb project settings set "Project X" --work-week mon-fri --work-start 7am --work-end 4pm --dry-run --json
 eb project settings set --file settings.csv -o results.csv   # project,projectAccess,workWeek,... per row
 \`\`\`
-Projects are matched by exact name or PortalID; hidden projects need the PortalID. Only the settings you pass are changed, and values are read back after saving.
+Projects are matched by exact name (including hidden projects) or PortalID. Only the settings you pass are changed, and values are read back after saving.
 
 ## 2. In-Browser "eb" Helper Reference
 

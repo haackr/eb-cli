@@ -12,7 +12,8 @@
  * which we always set when anything changes.
  */
 import { waitForEBuilderPageToSettle } from './exec.js';
-import { parseGuid, resolveProjectOnPage, type ProjectRef } from './process-instance.js';
+import { parseGuid, type ProjectRef } from './process-instance.js';
+import { getPortalIdByProjectNameAtOrigin } from './project.js';
 import { gotoAuthenticated, withSessionPage, type SessionPageOptions } from './session-page.js';
 
 const ID = 'ctl00_ctl00_ContentPlaceHolder1_contentSection_';
@@ -455,7 +456,7 @@ export async function readProjectSaveErrors(
 // ---------------------------------------------------------------------------
 
 export interface ProjectSettingsOptions extends SessionPageOptions {
-  /** Exact project name (case-insensitive) or PortalID GUID. Hidden projects need the PortalID. */
+  /** Exact project name (case-insensitive) or PortalID GUID. */
   project: string;
 }
 
@@ -482,10 +483,13 @@ async function openSettings(
   origin: string,
   project: string,
 ): Promise<{ project: ProjectRef; snapshot: ProjectSettingsSnapshot; url: string }> {
-  const id = parseGuid(project);
-  const ref: ProjectRef = id
-    ? { id, name: project }
-    : await resolveProjectOnPage(page, origin, project, { exact: true });
+  // Names are looked up on Manage Projects (ProjectList.aspx), which lists hidden projects too.
+  const id =
+    parseGuid(project) ?? parseGuid(await getPortalIdByProjectNameAtOrigin(page, origin, project));
+  if (!id) {
+    throw new ProjectSettingsError(`Could not read a PortalID for project "${project}"`);
+  }
+  const ref: ProjectRef = { id, name: project };
   const url = editUrl(origin, ref.id);
   await gotoAuthenticated(page, url, origin);
   if (!(await page.$(`#${ID}pvSettings`))) {

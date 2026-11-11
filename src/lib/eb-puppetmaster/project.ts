@@ -1,19 +1,34 @@
 import { Environment, baseurl } from './index.js';
+import { detectLoginPage, sessionCheckErrorFor } from './session-check.js';
 
 const projectListPath = '/da2/Projects/ProjectList.aspx';
 
 // Selectors for the project list table
 const pagingRowSelector = 'tr.Paging';
 
-// In-memory cache for PortalIDs by normalized project name and environment
+// In-memory cache for PortalIDs by normalized project name and site origin
 const projectPortalIdCache = new Map<string, string>();
+// Names that appear more than once with different PortalIDs, keyed like the cache
+const ambiguousProjects = new Map<string, Set<string>>();
 
-function getCacheKey(env: Environment, projectName: string): string {
-  return `${env}:${projectName.trim().toLowerCase()}`;
+function getCacheKey(origin: string, projectName: string): string {
+  return `${origin}:${projectName.trim().toLowerCase()}`;
 }
 
 export function clearProjectCache(): void {
   projectPortalIdCache.clear();
+  ambiguousProjects.clear();
+}
+
+/** Returns the cached PortalID, throwing when several projects share the name. */
+function cachedPortalId(cacheKey: string, projectName: string): string | undefined {
+  const ids = ambiguousProjects.get(cacheKey);
+  if (ids) {
+    throw new Error(
+      `Several projects are named '${projectName}'; pass the PortalID instead (${[...ids].join(', ')})`,
+    );
+  }
+  return projectPortalIdCache.get(cacheKey);
 }
 
 /**
@@ -22,7 +37,7 @@ export function clearProjectCache(): void {
  */
 async function extractAndCacheProjectsOnPage(
   page: puppeteer.Page,
-  env: Environment,
+  origin: string,
 ): Promise<{ name: string; portalId: string }[]> {
   const projects = await page.evaluate(() => {
     const rows = document.querySelectorAll('tr.RowData, tr.AltRowData');
@@ -41,7 +56,14 @@ async function extractAndCacheProjectsOnPage(
   });
 
   for (const proj of projects) {
-    projectPortalIdCache.set(getCacheKey(env, proj.name), proj.portalId);
+    const key = getCacheKey(origin, proj.name);
+    const existing = projectPortalIdCache.get(key);
+    if (existing && existing.toLowerCase() !== proj.portalId.toLowerCase()) {
+      const ids = ambiguousProjects.get(key) ?? new Set([existing]);
+      ids.add(proj.portalId);
+      ambiguousProjects.set(key, ids);
+    }
+    projectPortalIdCache.set(key, proj.portalId);
   }
 
   return projects;
@@ -77,21 +99,39 @@ export async function getPortalIdByProjectName(
   env: Environment,
   projectName: string,
 ): Promise<string> {
-  const cacheKey = getCacheKey(env, projectName);
-  const cachedPortalId = projectPortalIdCache.get(cacheKey);
-  if (cachedPortalId) {
-    return cachedPortalId;
+  return await getPortalIdByProjectNameAtOrigin(page, `https://${env}.${baseurl}`, projectName);
+}
+
+/**
+ * Same as getPortalIdByProjectName, for callers that have the site origin
+ * (e.g. "https://app-us2.e-builder.net") rather than an Environment.
+ *
+ * Reads the Manage Projects list (ProjectList.aspx), which includes hidden projects.
+ * Name matching is exact and case-insensitive.
+ */
+export async function getPortalIdByProjectNameAtOrigin(
+  page: puppeteer.Page,
+  origin: string,
+  projectName: string,
+): Promise<string> {
+  const cacheKey = getCacheKey(origin, projectName);
+  const cached = cachedPortalId(cacheKey, projectName);
+  if (cached) {
+    return cached;
   }
 
-  await page.goto(`https://${env}.${baseurl}${projectListPath}`, {
+  await page.goto(`${origin}${projectListPath}`, {
     waitUntil: 'domcontentloaded',
   });
+  if (await detectLoginPage(page)) {
+    throw sessionCheckErrorFor({ reason: 'redirected_to_login', landedUrl: page.url() }, origin);
+  }
 
   let currentPage = 1;
   while (true) {
-    await extractAndCacheProjectsOnPage(page, env);
+    await extractAndCacheProjectsOnPage(page, origin);
 
-    const foundPortalId = projectPortalIdCache.get(cacheKey);
+    const foundPortalId = cachedPortalId(cacheKey, projectName);
     if (foundPortalId) {
       return foundPortalId;
     }
