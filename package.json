@@ -64,6 +64,12 @@
       },
       "process": {
         "description": "Inspect and manage e-Builder process workflows and layouts."
+      },
+      "project": {
+        "description": "Read and change project settings."
+      },
+      "project settings": {
+        "description": "Show or change the Project Details → Settings tab."
       }
     },
     "node": "22.14.0",
