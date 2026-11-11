@@ -116,8 +116,12 @@ describe('chrome import (src/lib/eb-puppetmaster/chrome-import.ts)', () => {
       });
       assert.deepStrictEqual(endpoints, ['ws://127.0.0.1:9333/devtools/browser/id-1']);
       assert.strictEqual(approvals, 1);
-      assert.strictEqual(cookies.length, 5);
-      assert.ok(cookies.every((c) => c.domain.includes('e-builder.net')));
+      assert.deepStrictEqual([...new Set(cookies.map((c) => c.domain))].sort(), [
+        '.app-us2.e-builder.net',
+        '.e-builder.net',
+        'app-us2.e-builder.net',
+        'app.e-builder.net',
+      ]);
       assert.strictEqual(state.disconnected, true);
       assert.strictEqual(state.closed, false, 'must never close the user’s Chrome');
     });

@@ -128,6 +128,16 @@ async function watchAccountSelection(
   watchedPages.add(page);
 }
 
+/** True when the URL's host is e-Builder (not merely mentioned, e.g. in a redirect parameter). */
+export function isEBuilderHost(rawUrl: string): boolean {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return host === baseurl || host.endsWith(`.${baseurl}`);
+  } catch {
+    return false;
+  }
+}
+
 function isNavigationRace(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -664,8 +674,7 @@ async function completeTrimbleIdLogin(
     let lastSubmitTime = 0;
 
     while (Date.now() < mfaTimeout) {
-      const currentUrl = authPage.url();
-      if (currentUrl.includes('e-builder.net')) {
+      if (isEBuilderHost(authPage.url())) {
         break;
       }
 

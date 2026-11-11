@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
   Environment,
+  isEBuilderHost,
   loginInBrowser,
   LoginWindowClosedError,
 } from '../../lib/eb-puppetmaster/index.js';
@@ -82,5 +83,18 @@ describe('browser login (loginInBrowser)', () => {
       loginInBrowser(Environment.US1, { browser: disconnected.browser }),
       LoginWindowClosedError,
     );
+  });
+
+  it('isEBuilderHost checks the host, not the whole URL', () => {
+    assert.ok(isEBuilderHost('https://app-us2.e-builder.net/da2/Home/index2.aspx'));
+    assert.ok(isEBuilderHost('https://e-builder.net/'));
+    assert.ok(
+      !isEBuilderHost(
+        'https://id.trimble.com/ui/sign_in.html?redirect_uri=https%3A%2F%2Fapp.e-builder.net%2Fauth',
+      ),
+    );
+    assert.ok(!isEBuilderHost('https://e-builder.net.evil.example/'));
+    assert.ok(!isEBuilderHost('https://note-builder.net/'));
+    assert.ok(!isEBuilderHost('not a url'));
   });
 });
