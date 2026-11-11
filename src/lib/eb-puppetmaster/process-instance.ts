@@ -173,15 +173,35 @@ function pickOne<T>(items: T[], key: string, nameOf: (t: T) => string, what: str
   );
 }
 
-async function resolveProjectOnPage(
+/**
+ * Resolves a project name or PortalID. With `exact`, a name must match a project exactly
+ * (case-insensitive): use it for writes, where a partial match could pick the wrong project
+ * (e.g. when the intended project is hidden and missing from the list).
+ */
+export async function resolveProjectOnPage(
   page: puppeteer.Page,
   origin: string,
   project: string,
+  options: { exact?: boolean } = {},
 ): Promise<ProjectRef> {
   const id = parseGuid(project);
   const projects = await fetchProjects(page, origin);
   if (id) {
     return projects.find((p) => p.id === id) ?? { id, name: project };
+  }
+  if (options.exact) {
+    const k = project.trim().toLowerCase();
+    const exact = projects.filter((p) => p.name.toLowerCase() === k);
+    if (exact.length === 1) return exact[0]!;
+    if (exact.length > 1) {
+      throw new ProcessInstanceError(
+        `Several projects are named "${project}"; pass the PortalID instead (${exact.map((p) => p.id).join(', ')})`,
+      );
+    }
+    const similar = projects.filter((p) => p.name.toLowerCase().includes(k)).slice(0, 5);
+    throw new ProcessInstanceError(
+      `No project named exactly "${project}"${similar.length ? ` (similar: ${similar.map((p) => p.name).join(', ')})` : ''}. Hidden projects are not listed by name; pass the PortalID instead.`,
+    );
   }
   return pickOne(projects, project, (p) => p.name, 'Project');
 }

@@ -294,3 +294,25 @@ export const USER_SET_FIELD_ALIASES: Record<string, string[]> = {
     'user',
   ],
 };
+
+export const PROJECT_SETTINGS_ALIASES: Record<string, string[]> = {
+  project: ['project', 'projectName', 'project name', 'portalId', 'portal id', 'projectId'],
+  projectAccess: ['projectAccess', 'project access', 'access', 'visibility'],
+  denyTechsupport: [
+    'denyTechsupport',
+    'deny techsupport',
+    'deny techsupport access',
+    'deny tech support',
+    'deny tech support access',
+  ],
+  documentControl: ['documentControl', 'document control', 'enable document control'],
+  workflowDueDateOffset: [
+    'workflowDueDateOffset',
+    'workflow due date offset',
+    'due date offset',
+    'dueDateOffset',
+  ],
+  workDayStart: ['workDayStart', 'work day start', 'work day start time', 'start time'],
+  workDayEnd: ['workDayEnd', 'work day end', 'work day end time', 'end time'],
+  workWeek: ['workWeek', 'work week', 'working days', 'work days'],
+};

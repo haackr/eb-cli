@@ -108,6 +108,22 @@ export default class AgentGuide extends Command {
             'Never retry `process start` after an ambiguous error without checking `eb process instances` first (avoid duplicates).',
           ],
         },
+        projectSettings: {
+          description:
+            'Read and change the Project Details → Settings tab: Project Access, Deny Techsupport Access, Enable Document Control, Workflow Due Date Offset, Work Day Start/End Time, Work Week. Calendar exceptions and Plan Room are not supported.',
+          commands: {
+            'eb project settings get <project>':
+              'Current values; hidden/read-only settings are listed as unavailable.',
+            'eb project settings set <project> [--access visible|hidden] [--deny-techsupport yes|no] [--document-control yes|no] [--due-date-offset N] [--work-start 7am] [--work-end 3pm] [--work-week mon-fri] [--dry-run]':
+              'Change only the given settings, save, and read them back to confirm. No save when nothing differs.',
+            'eb project settings set --file settings.csv [-o results.csv] [--dry-run]':
+              'Batch: a "project" column plus one column per setting; blank cells are unchanged. All rows are validated before any save.',
+          },
+          rules: [
+            '<project> is an exact project name (case-insensitive) or PortalID. Hidden projects are not listed by name, so use the PortalID for them (and after setting --access hidden).',
+            'Saving posts the whole Project Details form; a project with invalid required details fields fails to save and the error is reported.',
+          ],
+        },
         browserDaemon: {
           description:
             'Before running many eb commands in a row, run "eb daemon start" to reuse one warm headless browser (each command still gets an isolated context; it exits after 15 idle minutes). "eb daemon stop" ends it.',
@@ -212,6 +228,14 @@ eb process set "RFI - 12" -P "Project X" -F "Drawing Number=A-101" --json
 eb process action "RFI - 12" -P "Project X" --action Revise --comment "Need drawing" --json
 \`\`\`
 Starting and acting are live operations that notify other users. View the instance first to get exact action names and editable fields. If a role-assigned step has not been accepted, field edits need \`--accept-ownership\`.
+
+### Project settings (Project Details → Settings tab)
+\`\`\`bash
+eb project settings get "Project X" --json
+eb project settings set "Project X" --work-week mon-fri --work-start 7am --work-end 4pm --dry-run --json
+eb project settings set --file settings.csv -o results.csv   # project,projectAccess,workWeek,... per row
+\`\`\`
+Projects are matched by exact name or PortalID; hidden projects need the PortalID. Only the settings you pass are changed, and values are read back after saving.
 
 ## 2. In-Browser "eb" Helper Reference
 
