@@ -6,7 +6,9 @@ export default class SessionImport extends Command {
 
 Connects to your running Chrome over remote debugging, reads only the e-Builder cookies, and disconnects; your browser and tabs are left as they are. Requires Chrome 144+ with remote debugging allowed at chrome://inspect/#remote-debugging (one-time setup; eb opens that page for you if needed). Chrome asks you to approve each connection.
 
-The environment, username, and account are detected from the session itself.`;
+The environment, username, and account are detected from the session itself.
+
+The imported session is the same login as your Chrome tab: logging out of either one (eb logout or e-Builder's Log Out) ends both.`;
   static override examples = [
     '<%= config.bin %> <%= command.id %>',
     '<%= config.bin %> <%= command.id %> --environment us2 # when Chrome is signed in to several',

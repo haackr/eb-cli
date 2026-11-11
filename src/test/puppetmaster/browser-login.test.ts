@@ -1,0 +1,86 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert';
+import {
+  Environment,
+  loginInBrowser,
+  LoginWindowClosedError,
+} from '../../lib/eb-puppetmaster/index.js';
+
+/** A fake visible login browser whose single tab follows `urls` (one per poll). */
+function fakeLoginBrowser(urls: string[], cookies: any[] = [{ name: 'c', value: '1' }]) {
+  let i = 0;
+  const visited: string[] = [];
+  const page: any = {
+    setDefaultNavigationTimeout: () => {},
+    setDefaultTimeout: () => {},
+    goto: async (u: string) => {
+      visited.push(u);
+    },
+    url: () => urls[Math.min(i++, urls.length - 1)],
+    evaluate: async () => false,
+    $: async () => null,
+    $$: async () => [],
+    exposeFunction: async () => {},
+  };
+  const browser: any = {
+    connected: true,
+    pages: async () => [page],
+    cookies: async () => cookies,
+  };
+  return { browser, page, visited };
+}
+
+describe('browser login (loginInBrowser)', () => {
+  it('opens the e-Builder login page and returns cookies once signed in', async () => {
+    const { browser, visited } = fakeLoginBrowser([
+      'https://id.trimble.com/ui/sign_in.html',
+      'https://app.e-builder.net/da2/Home/index2.aspx',
+    ]);
+    const result = await loginInBrowser(Environment.US1, { browser });
+    assert.deepStrictEqual(visited, [
+      'https://app.e-builder.net/auth/www/index.aspx?ReturnUrl=%2f',
+    ]);
+    assert.deepStrictEqual(result.cookies, [{ name: 'c', value: '1' }]);
+    assert.strictEqual(result.env, Environment.US1);
+  });
+
+  it('reports the environment the user actually landed in', async () => {
+    const { browser } = fakeLoginBrowser(['https://app-us2.e-builder.net/da2/Home/index2.aspx']);
+    const result = await loginInBrowser(Environment.US1, { browser });
+    assert.strictEqual(result.env, Environment.US2);
+  });
+
+  it('starts at the SSO URL when given and validates it', async () => {
+    const { browser, visited } = fakeLoginBrowser([
+      'https://app.e-builder.net/da2/Home/index2.aspx',
+    ]);
+    await loginInBrowser(Environment.US1, { browser, startUrl: 'https://idp.example.com/eb' });
+    assert.deepStrictEqual(visited, ['https://idp.example.com/eb']);
+    await assert.rejects(
+      loginInBrowser(Environment.US1, { browser, startUrl: 'not a url' }),
+      /absolute URL/,
+    );
+    await assert.rejects(
+      loginInBrowser(Environment.US1, { browser, startUrl: 'file:///etc/passwd' }),
+      /HTTP or HTTPS/,
+    );
+  });
+
+  it('fails fast when the user closes the window', async () => {
+    const closedAllTabs = fakeLoginBrowser(['https://id.trimble.com/ui/sign_in.html']);
+    let polls = 0;
+    const realPages = closedAllTabs.browser.pages;
+    closedAllTabs.browser.pages = async () => (polls++ === 0 ? realPages() : []);
+    await assert.rejects(
+      loginInBrowser(Environment.US1, { browser: closedAllTabs.browser }),
+      LoginWindowClosedError,
+    );
+
+    const disconnected = fakeLoginBrowser(['https://id.trimble.com/ui/sign_in.html']);
+    disconnected.browser.connected = false;
+    await assert.rejects(
+      loginInBrowser(Environment.US1, { browser: disconnected.browser }),
+      LoginWindowClosedError,
+    );
+  });
+});

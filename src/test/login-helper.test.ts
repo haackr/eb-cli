@@ -10,6 +10,7 @@ import {
   saveRefreshedSession,
   SessionVerificationError,
   promptImportAndSaveSession,
+  chooseLoginMode,
 } from '../lib/login-helper.js';
 import * as db from '../lib/db.js';
 import * as eb from '../lib/eb-puppetmaster/index.js';
@@ -439,6 +440,65 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
           finalize: { interactive: false },
         }),
         /no signed-in e-Builder session/,
+      );
+    });
+  });
+
+  describe('chooseLoginMode', () => {
+    it('defaults to the browser unless a password or provider is given', () => {
+      assert.strictEqual(chooseLoginMode({}), 'browser');
+      assert.strictEqual(chooseLoginMode({ username: 'jane' }), 'browser');
+      assert.strictEqual(chooseLoginMode({ password: 'x' }), 'credentials');
+      assert.strictEqual(chooseLoginMode({ getTotp: async () => '1' }), 'credentials');
+      assert.strictEqual(chooseLoginMode({ browser: false }), 'credentials');
+      assert.strictEqual(chooseLoginMode({ browser: true, password: 'x' }), 'browser');
+      assert.strictEqual(chooseLoginMode({ ssoUrl: 'https://idp', browser: false }), 'sso');
+    });
+  });
+
+  describe('promptLoginAndSaveSession (browser mode)', () => {
+    it('captures the session from the window without prompting for credentials', async () => {
+      const landed = 'https://app-us2.e-builder.net/da2/Home/index2.aspx';
+      const page: any = {
+        setDefaultNavigationTimeout: () => {},
+        setDefaultTimeout: () => {},
+        goto: async () => ({ status: () => 200 }),
+        url: () => landed,
+        evaluate: async () => false,
+        waitForSelector: async () => ({}),
+      };
+      const browser: any = {
+        connected: true,
+        pages: async () => [page],
+        cookies: async () => [{ name: 'c', value: '1' }],
+        createBrowserContext: async () => ({
+          newPage: async () => page,
+          setCookie: async () => {},
+          cookies: async () => [{ name: 'c', value: '2' }],
+          close: async () => {},
+        }),
+      };
+      const launches: boolean[] = [];
+      eb.BrowserManager.getInstance().getBrowser = async (headless?: boolean) => {
+        launches.push(Boolean(headless));
+        return browser;
+      };
+      eb.BrowserManager.getInstance().closeBrowser = async () => {};
+
+      const saved = await promptLoginAndSaveSession({
+        environment: 'us1',
+        username: 'jane@example.com',
+      });
+      assert.deepStrictEqual(
+        launches,
+        [false, true],
+        'visible login window, then headless verification',
+      );
+      assert.strictEqual(saved.username, 'jane@example.com');
+      assert.strictEqual(
+        db.getSessionById(saved.sessionId)!.environment,
+        'us2',
+        'environment from where the user landed',
       );
     });
   });

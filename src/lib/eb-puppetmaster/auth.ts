@@ -211,7 +211,10 @@ async function waitForEBuilderHome(
   const watchedPages = new WeakSet<puppeteer.Page>();
 
   while (Date.now() < timeoutAt) {
-    for (const openPage of await browser.pages()) {
+    const openPages = browser.connected ? await browser.pages().catch(() => []) : [];
+    // Closing the window disconnects the browser, or (on macOS) leaves Chrome with no pages.
+    if (!browser.connected || openPages.length === 0) throw new LoginWindowClosedError();
+    for (const openPage of openPages) {
       let url: URL;
       try {
         url = new URL(openPage.url());
@@ -1051,39 +1054,96 @@ export async function login(
   return cookies;
 }
 
+export class LoginWindowClosedError extends Error {
+  constructor() {
+    super('The login window was closed before sign-in finished.');
+    this.name = 'LoginWindowClosedError';
+  }
+}
+
+export type BrowserLoginOptions = {
+  /** Where to start (default: the environment's e-Builder login page). */
+  startUrl?: string | undefined;
+  /** Account to pick automatically if e-Builder shows the account selection page. */
+  account?: string | undefined;
+  /** Called with the account the user picks on the account selection page. */
+  onAccountSelected?: ((account: Account) => void) | undefined;
+  browser?: puppeteer.Browser | undefined;
+};
+
+export type BrowserLoginResult = {
+  cookies: puppeteer.Cookie[];
+  /** Environment of the page the user landed on (may differ from the one requested). */
+  env: Environment;
+};
+
+function environmentOfUrl(rawUrl: string): Environment | undefined {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    if (!host.endsWith(`.${baseurl}`)) return undefined;
+    const sub = host.slice(0, -(baseurl.length + 1));
+    return (Object.values(Environment) as string[]).includes(sub)
+      ? (sub as Environment)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Opens a visible Chrome window (fresh temporary profile) at the e-Builder login page and lets
+ * the user sign in however they normally do: password, passkey, MFA, or SSO. Nothing on the
+ * page is automated. Returns the cookies as soon as an authenticated e-Builder page loads.
+ */
+export async function loginInBrowser(
+  env: Environment,
+  options: BrowserLoginOptions = {},
+): Promise<BrowserLoginResult> {
+  let startUrl = `https://${env}.${baseurl}/auth/www/index.aspx?ReturnUrl=%2f`;
+  if (options.startUrl) {
+    let url: URL;
+    try {
+      url = new URL(options.startUrl);
+    } catch {
+      throw new Error('SSO URL must be an absolute URL.');
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new Error('SSO URL must use HTTP or HTTPS.');
+    }
+    startUrl = url.href;
+  }
+
+  const browser =
+    options.browser ??
+    (await BrowserManager.getInstance().getBrowser(false, ['--window-size=1200,800'], true));
+
+  try {
+    const [page] = await browser.pages();
+    if (!page) throw new Error('No page found');
+    page.setDefaultNavigationTimeout(90_000);
+    page.setDefaultTimeout(90_000);
+
+    await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+
+    const home = await waitForEBuilderHome(
+      browser,
+      env,
+      options.onAccountSelected,
+      options.account,
+    );
+    return { cookies: await browser.cookies(), env: environmentOfUrl(home.url()) ?? env };
+  } catch (err) {
+    if (!browser.connected) throw new LoginWindowClosedError();
+    throw err;
+  }
+}
+
 export async function loginWithSso(
   env: Environment,
   ssoUrl: string,
   browser?: puppeteer.Browser,
 ): Promise<puppeteer.Cookie[]> {
-  let url: URL;
-  try {
-    url = new URL(ssoUrl);
-  } catch {
-    throw new Error('SSO URL must be an absolute URL.');
-  }
-
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-    throw new Error('SSO URL must use HTTP or HTTPS.');
-  }
-
-  if (!browser) {
-    browser = await BrowserManager.getInstance().getBrowser(
-      false,
-      ['--window-size=1200,800'],
-      true,
-    );
-  }
-
-  const [page] = await browser.pages();
-  if (!page) throw new Error('No page found');
-  page.setDefaultNavigationTimeout(90_000);
-  page.setDefaultTimeout(90_000);
-
-  await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-
-  await waitForEBuilderHome(browser, env);
-  return await browser.cookies();
+  return (await loginInBrowser(env, { startUrl: ssoUrl, browser })).cookies;
 }
 
 /**

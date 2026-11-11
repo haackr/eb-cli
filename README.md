@@ -171,29 +171,44 @@ log in to e-Builder
 
 ```
 USAGE
-  $ eb login [-s] [-u <value>] [-p <value>] [-a <value>] [-e us1|us2|us3|us4|gov|ca] [--sso-url <value>]
+  $ eb login [-b] [-s] [-u <value>] [-p <value>] [-a <value>] [-e us1|us2|us3|us4|gov|ca] [--sso-url <value>]
+    [--provider 1password|bitwarden|keychain|env] [--item <value>] [--vault <value>]
 
 FLAGS
   -a, --account=<value>       account (if the user has access to multiple accounts)
+  -b, --[no-]browser          sign in yourself in a browser window (default when no password or --provider is
+                              given); --no-browser prompts for username/password in the terminal instead
   -e, --environment=<option>  environment
                               <options: us1|us2|us3|us4|gov|ca>
   -p, --password=<value>      password
-  -s, --show_browser          show browser window (useful for debugging; default is headless)
+  -s, --show_browser          automated login only: show the browser window (useful for debugging)
   -u, --username=<value>      username
+      --item=<value>          Item name, title, or reference in the credential manager (default: "e-Builder")
+      --provider=<option>     Credential manager provider (1password, bitwarden, keychain, env)
+                              <options: 1password|bitwarden|keychain|env>
       --sso-url=<value>       SSO entry URL; opens a browser for interactive provider authentication
+      --vault=<value>         1Password vault name or ID
 
 DESCRIPTION
   log in to e-Builder
+
+  With no password or credential provider, eb opens a browser window: sign in the way you normally do (password,
+  passkey, MFA, SSO) and the session is saved as soon as e-Builder loads. With --provider (or --password), eb signs
+  in for you headlessly. The username and account are detected from e-Builder either way.
 
 ALIASES
   $ eb session create
 
 EXAMPLES
-  $ eb login
+  $ eb login # sign in yourself in a browser window
 
-  $ eb login --show_browser # keep browser visible during login
+  $ eb login --environment us2
 
-  $ eb login --username jane.doe --environment us1 --sso-url https://idp.example.com/ebuilder
+  $ eb login --provider 1password --item "e-Builder" # automated
+
+  $ eb login --no-browser # type username/password in the terminal
+
+  $ eb login --sso-url https://idp.example.com/ebuilder
 ```
 
 ## `eb logout`

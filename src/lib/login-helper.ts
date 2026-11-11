@@ -4,7 +4,15 @@ import * as eb from './eb-puppetmaster/index.js';
 import * as db from './db.js';
 import type { Account } from './eb-puppetmaster/index.js';
 
-interface LoginOptions {
+export type LoginMode = 'browser' | 'sso' | 'credentials';
+
+export interface LoginOptions {
+  /**
+   * Sign in yourself in a browser window (no automation). Default: true unless a password or
+   * credential provider is given. Ignored with `ssoUrl`, which always uses the browser.
+   */
+  browser?: boolean | undefined;
+  /** Credentials mode only: keep the automated login browser visible. */
   showBrowser?: boolean;
   username?: string;
   password?: string;
@@ -174,42 +182,41 @@ export async function saveRefreshedSession(
   }
 }
 
+/** Which login flow `eb login` runs for these options. */
+export function chooseLoginMode(options: LoginOptions): LoginMode {
+  if (options.ssoUrl) return 'sso';
+  if (options.browser !== undefined) return options.browser ? 'browser' : 'credentials';
+  return options.password || options.getTotp ? 'credentials' : 'browser';
+}
+
 export async function promptLoginAndSaveSession(
   options: LoginOptions = {},
 ): Promise<FinalizedSession> {
-  const env = await resolveEnvironment(
+  let env = await resolveEnvironment(
     options.environment,
     'Select the e-Builder environment you want to log in to:',
   );
+  const mode = chooseLoginMode(options);
 
   let username = options.username;
-  if (!username) {
-    username = await input({
-      message: 'Enter your username:',
-    });
-  }
-
-  const usingSso = Boolean(options.ssoUrl);
   let pass = options.password;
-  if (!usingSso && !pass) {
-    pass = await password({ message: 'Enter your password:', mask: '*' });
+  if (mode === 'credentials') {
+    if (!username) username = await input({ message: 'Enter your username:' });
+    if (!pass) pass = await password({ message: 'Enter your password:', mask: '*' });
   }
 
-  const spinner = ora(
-    usingSso || options.showBrowser
-      ? 'Waiting for interactive login in the browser...'
-      : 'Logging in to e-Builder...',
-  ).start();
+  const spinner = ora();
+  const onAccountSelected = (selectedAccount: Account) => {
+    options.account = selectedAccount.text;
+  };
   let cookies;
   try {
-    if (options.ssoUrl) {
-      spinner.info('Complete your SSO login in the browser window.');
-      spinner.start('Waiting for SSO login in the browser...');
-      cookies = await eb.loginWithSso(env, options.ssoUrl);
-    } else {
+    if (mode === 'credentials') {
       if (options.showBrowser) {
         spinner.info('Complete Trimble ID authentication in the browser if prompted.');
         spinner.start('Waiting for interactive login in the browser...');
+      } else {
+        spinner.start('Logging in to e-Builder...');
       }
       cookies = await eb.login(
         env,
@@ -223,17 +230,33 @@ export async function promptLoginAndSaveSession(
           return selectedAccount.value;
         },
         undefined,
-        (selectedAccount: Account) => {
-          options.account = selectedAccount.text;
-        },
+        onAccountSelected,
         options.getTotp,
       );
+    } else {
+      spinner.start(
+        mode === 'sso'
+          ? 'Complete your SSO sign-in in the browser window...'
+          : 'Sign in to e-Builder in the browser window...',
+      );
+      const result = await eb.loginInBrowser(env, {
+        startUrl: options.ssoUrl,
+        account: options.account,
+        onAccountSelected,
+      });
+      cookies = result.cookies;
+      env = result.env;
+      // Done with the window as soon as the session is captured.
+      await eb.BrowserManager.getInstance().closeBrowser();
     }
   } catch (e: any) {
     spinner.fail(`Failed to log in: ${e.message}`);
-    if (e.stack) {
+    if (e.stack && !(e instanceof eb.LoginWindowClosedError)) {
       console.error(e.stack);
     }
+    await eb.BrowserManager.getInstance()
+      .closeBrowser()
+      .catch(() => {});
     throw e;
   }
 
@@ -245,12 +268,12 @@ export async function promptLoginAndSaveSession(
       env,
       cookies,
       { username, account: options.account },
-      { headless: !options.showBrowser },
+      { headless: mode !== 'credentials' || !options.showBrowser },
     );
   } catch (e) {
     if (e instanceof SessionVerificationError) {
       spinner.fail('Failed to verify login.');
-      await eb.logout(env, !options.showBrowser, cookies).catch(() => {});
+      await eb.logout(env, true, cookies).catch(() => {});
       throw new Error('Login verification failed');
     }
     throw e;
