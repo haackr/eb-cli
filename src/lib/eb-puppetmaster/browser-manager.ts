@@ -316,6 +316,24 @@ export class BrowserManager {
 }
 
 /**
+ * Returns a tab for a window a person will look at. Never reuses Chrome's initial tab: on
+ * Windows the window holding it stays a blank, toolbar-less white panel (it never finishes
+ * showing) until another tab is created. Opens a new tab, brings it to the front, and closes
+ * the initial blank tab(s).
+ */
+export async function openVisiblePage(browser: puppeteer.Browser): Promise<puppeteer.Page> {
+  const initial = await browser.pages();
+  const page = await browser.newPage();
+  await page.bringToFront().catch(() => {});
+  for (const old of initial) {
+    if (old !== page && (old.url() === 'about:blank' || old.url() === '')) {
+      await old.close().catch(() => {});
+    }
+  }
+  return page;
+}
+
+/**
  * Configures a Puppeteer page for maximum performance during automated runs.
  * Intercepts and blocks non-critical resources (images, fonts, stylesheets, trackers)
  * and configures generous operation timeouts.

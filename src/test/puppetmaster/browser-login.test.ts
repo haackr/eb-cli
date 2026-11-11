@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import {
   Environment,
   isEBuilderHost,
+  openVisiblePage,
   loginInBrowser,
   LoginWindowClosedError,
 } from '../../lib/eb-puppetmaster/index.js';
@@ -13,6 +14,7 @@ function fakeLoginBrowser(urls: string[], cookies: any[] = [{ name: 'c', value: 
   const visited: string[] = [];
   const page: any = {
     setDefaultNavigationTimeout: () => {},
+    bringToFront: async () => {},
     setDefaultTimeout: () => {},
     goto: async (u: string) => {
       visited.push(u);
@@ -26,6 +28,7 @@ function fakeLoginBrowser(urls: string[], cookies: any[] = [{ name: 'c', value: 
   const browser: any = {
     connected: true,
     pages: async () => [page],
+    newPage: async () => page,
     cookies: async () => cookies,
   };
   return { browser, page, visited };
@@ -96,5 +99,24 @@ describe('browser login (loginInBrowser)', () => {
     assert.ok(!isEBuilderHost('https://e-builder.net.evil.example/'));
     assert.ok(!isEBuilderHost('https://note-builder.net/'));
     assert.ok(!isEBuilderHost('not a url'));
+  });
+
+  it('openVisiblePage opens a new tab and closes only the initial blank one', async () => {
+    const closed: string[] = [];
+    const mk = (name: string, url: string) => ({
+      name,
+      url: () => url,
+      close: async () => {
+        closed.push(name);
+      },
+      bringToFront: async () => {},
+    });
+    const initial = mk('initial', 'about:blank');
+    const other = mk('other', 'https://example.com/');
+    const fresh = mk('fresh', 'about:blank');
+    const browser: any = { pages: async () => [initial, other], newPage: async () => fresh };
+    const page: any = await openVisiblePage(browser);
+    assert.strictEqual(page.name, 'fresh');
+    assert.deepStrictEqual(closed, ['initial']);
   });
 });

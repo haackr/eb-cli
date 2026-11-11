@@ -1,5 +1,6 @@
 import type * as puppeteer from 'puppeteer';
 import { Environment, baseurl, BrowserManager } from './index.js';
+import { openVisiblePage } from './browser-manager.js';
 import {
   classifyNavigationError,
   isLoginUrl,
@@ -569,9 +570,7 @@ async function completeTrimbleIdLogin(
     authBrowser = await BrowserManager.getInstance().getBrowser(false, ['--window-size=1200,800']);
     await authBrowser.defaultBrowserContext().setCookie(...cookies);
 
-    const [visiblePage] = await authBrowser.pages();
-    if (!visiblePage) throw new Error('No page found');
-    authPage = visiblePage;
+    authPage = await openVisiblePage(authBrowser);
     await authPage.goto(trimbleUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
   }
 
@@ -897,7 +896,7 @@ export async function login(
       `--window-size=800,600`,
     ]);
   }
-  const [page] = await browser.pages();
+  const page = headless ? (await browser.pages())[0] : await openVisiblePage(browser);
 
   if (!page) throw new Error('No page found');
   page.setDefaultNavigationTimeout(90_000);
@@ -1127,8 +1126,7 @@ export async function loginInBrowser(
     (await BrowserManager.getInstance().getBrowser(false, ['--window-size=1200,800'], true));
 
   try {
-    const [page] = await browser.pages();
-    if (!page) throw new Error('No page found');
+    const page = await openVisiblePage(browser);
     page.setDefaultNavigationTimeout(90_000);
     page.setDefaultTimeout(90_000);
 
