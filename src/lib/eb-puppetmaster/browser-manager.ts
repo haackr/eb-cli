@@ -257,6 +257,9 @@ export class BrowserManager {
             channel: 'chrome',
             ignoreDefaultArgs: ignoreDefaults,
             args: newLaunchArgs,
+            // A person uses this window: let the page follow the real window size. Puppeteer's
+            // default 800x600 viewport emulation misplaces native popups like <select> lists.
+            defaultViewport: null,
           });
           this.browser.on('disconnected', () => {
             try {
