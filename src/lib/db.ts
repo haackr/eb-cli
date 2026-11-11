@@ -43,7 +43,6 @@ let deleteUserSessions: Database.Statement;
 let dbupdateSessionById: Database.Statement;
 let updateSessionCookiesStmt: Database.Statement;
 let updateSessionIdentityStmt: Database.Statement;
-let findSessionsByUserEnvStmt: Database.Statement;
 
 let getCachedSchemaStmt: Database.Statement;
 let setCachedSchemaStmt: Database.Statement;
@@ -85,9 +84,6 @@ function prepareStatements() {
   updateSessionCookiesStmt = db.prepare(`UPDATE sessions SET session_cookies = ? WHERE id = ?`);
   updateSessionIdentityStmt = db.prepare(
     `UPDATE sessions SET account = ?, account_id = ? WHERE id = ?`,
-  );
-  findSessionsByUserEnvStmt = db.prepare(
-    `SELECT * FROM sessions WHERE lower(username) = lower(?) AND environment = ? ORDER BY id DESC`,
   );
 
   getCachedSchemaStmt = db.prepare(`
@@ -196,29 +192,6 @@ export function addSession(
 /** Sets a session's account name and account GUID (identity backfill). */
 export function updateSessionIdentity(id: number, account: string, account_id: string | null) {
   updateSessionIdentityStmt.run(account, account_id, id);
-}
-
-/**
- * The stored session that belongs to the same user and account in this environment, if any.
- * Matches on account GUID when known; otherwise on a non-empty account name (case-insensitive).
- */
-export function findMatchingSession(
-  username: string,
-  environment: string,
-  identity: { account?: string | undefined; accountId?: string | undefined },
-): SessionRow | undefined {
-  const candidates = findSessionsByUserEnvStmt.all(username, environment) as SessionRow[];
-  if (identity.accountId) {
-    const byId = candidates.find((s) => s.account_id === identity.accountId);
-    if (byId) return byId;
-  }
-  const name = identity.account?.trim().toLowerCase();
-  if (!name) return undefined;
-  return candidates.find(
-    (s) =>
-      (s.account ?? '').trim().toLowerCase() === name &&
-      (!identity.accountId || !s.account_id || s.account_id === identity.accountId),
-  );
 }
 
 export function getSessions(): SessionRow[] {

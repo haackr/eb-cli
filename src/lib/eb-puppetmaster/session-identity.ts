@@ -65,6 +65,17 @@ export function cookieHeaderFor(cookies: CookieLike[], host: string): string {
     .join('; ');
 }
 
+/**
+ * The ASP.NET session id for this environment's app host. It identifies one e-Builder login:
+ * it stays the same across cookie refreshes (unlike `.ASPXAUTH`, which is reissued), and a new
+ * login gets a new one.
+ */
+export function getServerSessionId(env: Environment, cookies: CookieLike[]): string | undefined {
+  const appHost = `${env}.${baseurl}`;
+  return cookies.find((c) => c.name === 'ASP.NET_SessionId' && cookieMatchesHost(c, appHost))
+    ?.value;
+}
+
 export function decodeJwtClaims(token: string): JwtClaims | undefined {
   const part = token.split('.')[1];
   if (!part) return undefined;

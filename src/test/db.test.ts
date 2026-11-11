@@ -16,7 +16,6 @@ import {
   deleteSessionsByUsername,
   resetSequenceIfEmpty,
   updateSessionIdentity,
-  findMatchingSession,
 } from '../lib/db.js';
 import Database from 'better-sqlite3';
 
@@ -170,43 +169,6 @@ describe('Database Operations (src/lib/db.ts)', () => {
     updateSessionIdentity(1, 'Acme', 'acct-1');
     assert.strictEqual(getSessionById(1)?.account, 'Acme');
     assert.strictEqual(getSessionById(1)?.account_id, 'acct-1');
-  });
-
-  it('findMatchingSession matches by account id, then by non-empty account name', () => {
-    addSession('jane@example.com', 'us1', 'Acme', '[]', 'acct-1');
-    addSession('jane@example.com', 'us1', 'Other', '[]', 'acct-2');
-    addSession('jane@example.com', 'us1', 'Legacy', '[]');
-    addSession('jane@example.com', 'us1', '', '[]');
-
-    assert.strictEqual(
-      findMatchingSession('JANE@example.com', 'us1', { accountId: 'acct-2' })?.id,
-      2,
-    );
-    // Renamed account: the id still wins.
-    assert.strictEqual(
-      findMatchingSession('jane@example.com', 'us1', {
-        account: 'Acme Renamed',
-        accountId: 'acct-1',
-      })?.id,
-      1,
-    );
-    // Legacy row without an id matches by name.
-    assert.strictEqual(
-      findMatchingSession('jane@example.com', 'us1', { account: 'legacy', accountId: 'acct-9' })
-        ?.id,
-      3,
-    );
-    // A name match never crosses a different known account id.
-    assert.strictEqual(
-      findMatchingSession('jane@example.com', 'us1', { account: 'Acme', accountId: 'acct-9' }),
-      undefined,
-    );
-    // Blank account names never match each other.
-    assert.strictEqual(findMatchingSession('jane@example.com', 'us1', { account: '' }), undefined);
-    assert.strictEqual(
-      findMatchingSession('jane@example.com', 'us2', { accountId: 'acct-1' }),
-      undefined,
-    );
   });
 
   it('migrates a database created before account_id existed', () => {

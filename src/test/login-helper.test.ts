@@ -9,6 +9,7 @@ import {
   finalizeSession,
   saveRefreshedSession,
   SessionVerificationError,
+  promptImportAndSaveSession,
 } from '../lib/login-helper.js';
 import * as db from '../lib/db.js';
 import * as eb from '../lib/eb-puppetmaster/index.js';
@@ -222,21 +223,33 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
       assert.strictEqual(saved.accountId, null);
     });
 
-    it('updates the existing session for the same user and account instead of duplicating', async () => {
-      db.addSession('jane@example.com', 'us2', '', '[]', 'acct-1');
+    const sid = (v: string) => ({
+      name: 'ASP.NET_SessionId',
+      value: v,
+      domain: 'app-us2.e-builder.net',
+    });
+    const jane = identity({
+      username: 'jane@example.com',
+      accountName: 'Acme',
+      accountId: 'acct-1',
+    });
+
+    it('updates the stored row only when it holds the same e-Builder login', async () => {
+      db.addSession('jane@example.com', 'us2', '', JSON.stringify([sid('S1')]), 'acct-1');
       db.setCredentialRef(1, 'env', 'e-Builder');
-      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(true);
+      // isLoggedIn hands back refreshed cookies that still carry the same ASP.NET session id.
+      eb.BrowserManager.getInstance().getBrowser = async () =>
+        verifiedBrowser(true, [
+          sid('S1'),
+          { name: '.ASPXAUTH', value: 'reissued', domain: 'app-us2.e-builder.net' },
+        ]);
       const saved = await finalizeSession(
         eb.Environment.US2,
-        [],
+        [sid('S1')],
         {},
         {
           interactive: false,
-          identify: identity({
-            username: 'jane@example.com',
-            accountName: 'Acme',
-            accountId: 'acct-1',
-          }),
+          identify: jane,
         },
       );
       assert.strictEqual(saved.sessionId, 1);
@@ -244,6 +257,55 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
       assert.strictEqual(db.getSessions().length, 1);
       assert.strictEqual(db.getSessionById(1)!.account, 'Acme');
       assert.ok(db.getCredentialRef(1), 'credential ref stays attached');
+    });
+
+    it('keeps the old row for a different login of the same user and account', async () => {
+      const old = JSON.stringify([sid('S1')]);
+      db.addSession('jane@example.com', 'us2', 'Acme', old, 'acct-1');
+      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(true, [sid('S2')]);
+      const saved = await finalizeSession(
+        eb.Environment.US2,
+        [sid('S2')],
+        {},
+        {
+          interactive: false,
+          identify: jane,
+        },
+      );
+      assert.strictEqual(saved.sessionId, 2);
+      assert.strictEqual(saved.updatedExisting, false);
+      assert.strictEqual(
+        db.getSessionById(1)!.session_cookies,
+        old,
+        'old login left intact to log out later',
+      );
+    });
+
+    it('never matches across environments or without a session id', async () => {
+      db.addSession(
+        'jane@example.com',
+        'us1',
+        'Acme',
+        JSON.stringify([{ ...sid('S1'), domain: 'app.e-builder.net' }]),
+        'acct-1',
+      );
+      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(true, [sid('S1')]);
+      const a = await finalizeSession(
+        eb.Environment.US2,
+        [sid('S1')],
+        {},
+        { interactive: false, identify: jane },
+      );
+      assert.strictEqual(a.updatedExisting, false);
+      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(true, []);
+      const b = await finalizeSession(
+        eb.Environment.US2,
+        [],
+        {},
+        { interactive: false, identify: jane },
+      );
+      assert.strictEqual(b.updatedExisting, false);
+      assert.strictEqual(db.getSessions().length, 3);
     });
 
     it('throws SessionVerificationError and saves nothing when cookies are not authenticated', async () => {
@@ -297,6 +359,87 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
         return {};
       });
       assert.strictEqual(called, false);
+    });
+  });
+
+  describe('promptImportAndSaveSession', () => {
+    const okBrowser = () =>
+      ({
+        connected: true,
+        createBrowserContext: async () => ({
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            url: () => 'https://app-us2.e-builder.net/da2/Home/index2.aspx',
+            goto: async () => ({ status: () => 200 }),
+            waitForSelector: async () => ({}),
+          }),
+          setCookie: async () => {},
+          cookies: async () => [],
+          close: async () => {},
+        }),
+      }) as any;
+    const chromeJar = [
+      { name: '.ASPXAUTH', value: 'a2', domain: 'app-us2.e-builder.net' },
+      { name: '_ga', value: 'ga', domain: '.e-builder.net' },
+      { name: '.ASPXAUTH', value: 'a1', domain: 'app.e-builder.net' },
+    ] as any[];
+
+    it('imports the requested environment with only its cookies and the detected identity', async () => {
+      eb.BrowserManager.getInstance().getBrowser = async () => okBrowser();
+      eb.BrowserManager.getInstance().closeBrowser = async () => {};
+      let identifiedWith: any[] = [];
+      const saved = await promptImportAndSaveSession({
+        environment: 'us2',
+        readCookies: async () => chromeJar,
+        finalize: {
+          interactive: false,
+          identify: async (_env, cookies) => {
+            identifiedWith = cookies as any[];
+            return { username: 'jane@example.com', accountName: 'Acme', accountId: 'acct-1' };
+          },
+        },
+      });
+      assert.strictEqual(saved.username, 'jane@example.com');
+      assert.strictEqual(saved.account, 'Acme');
+      assert.deepStrictEqual(
+        identifiedWith.map((c) => c.value),
+        ['a2', 'ga'],
+      );
+      const row = db.getSessionById(saved.sessionId)!;
+      assert.strictEqual(row.environment, 'us2');
+      assert.deepStrictEqual(
+        JSON.parse(row.session_cookies).map((c: any) => c.value),
+        ['a2', 'ga'],
+      );
+    });
+
+    it('requires --environment when Chrome has several and prompting is off', async () => {
+      await assert.rejects(
+        promptImportAndSaveSession({
+          readCookies: async () => chromeJar,
+          finalize: { interactive: false },
+        }),
+        /several e-Builder environments \(US-1, US-2\); pass --environment/,
+      );
+    });
+
+    it('explains when Chrome has no session for the requested environment', async () => {
+      await assert.rejects(
+        promptImportAndSaveSession({
+          environment: 'us3',
+          readCookies: async () => chromeJar,
+          finalize: { interactive: false },
+        }),
+        /no e-Builder session for US-3\. Found: US-1, US-2/,
+      );
+      await assert.rejects(
+        promptImportAndSaveSession({
+          readCookies: async () => [],
+          finalize: { interactive: false },
+        }),
+        /no signed-in e-Builder session/,
+      );
     });
   });
 });

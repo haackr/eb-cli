@@ -5,6 +5,7 @@ import {
   cookieMatchesHost,
   cookieHeaderFor,
   decodeJwtClaims,
+  getServerSessionId,
   getJwtClaims,
   parseGainsightIdentity,
   identifySession,
@@ -81,6 +82,16 @@ describe('session identity (src/lib/eb-puppetmaster/session-identity.ts)', () =>
     assert.match(header, /^JWT=/);
     assert.match(header, /_ga=ga/);
     assert.doesNotMatch(header, /ASPXAUTH|__session__/);
+  });
+
+  it('reads the ASP.NET session id for the environment host only', () => {
+    const cookies = [
+      { name: 'ASP.NET_SessionId', value: 'us1-sid', domain: 'app.e-builder.net' },
+      { name: 'ASP.NET_SessionId', value: 'us2-sid', domain: 'app-us2.e-builder.net' },
+    ];
+    assert.strictEqual(getServerSessionId(Environment.US2, cookies as any), 'us2-sid');
+    assert.strictEqual(getServerSessionId(Environment.US1, cookies as any), 'us1-sid');
+    assert.strictEqual(getServerSessionId(Environment.US3, cookies as any), undefined);
   });
 
   it('decodes JWT claims and tolerates garbage', () => {

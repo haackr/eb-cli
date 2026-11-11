@@ -64,15 +64,15 @@ export interface FinalizedSession {
   username: string;
   account: string;
   accountId: string | null;
-  /** True when an existing session for the same user and account was updated in place. */
+  /** True when a stored session for the same e-Builder login was updated in place. */
   updatedExisting: boolean;
 }
 
 /**
  * The single place every login method ends: verifies the cookies, identifies the user and
  * account from e-Builder itself, fills gaps from `hints` (then prompts, if allowed), and saves
- * the session, updating the existing row for the same user + account instead of adding a
- * duplicate. Throws SessionVerificationError when the cookies are not authenticated.
+ * the session as a new row, unless a stored row already holds this same login (then that row
+ * is updated). Throws SessionVerificationError when the cookies are not authenticated.
  */
 export async function finalizeSession(
   env: eb.Environment,
@@ -112,10 +112,7 @@ export async function finalizeSession(
 
   const shortEnv = eb.getShortEnv(env);
   const cookieJson = JSON.stringify(savedCookies);
-  const existing = db.findMatchingSession(username, shortEnv, {
-    account,
-    accountId: accountId ?? undefined,
-  });
+  const existing = findSameLogin(env, [cookies, savedCookies]);
 
   let sessionId: number;
   if (existing) {
@@ -127,6 +124,31 @@ export async function finalizeSession(
   }
 
   return { sessionId, username, account, accountId, updatedExisting: Boolean(existing) };
+}
+
+/**
+ * The stored session holding the same e-Builder login (same ASP.NET session id), if any.
+ * Only that case is updated in place: a *different* login always gets its own row, because
+ * overwriting it would orphan a live server session that could then never be logged out (and
+ * e-Builder caps concurrent sessions per user).
+ */
+function findSameLogin(env: eb.Environment, cookieSets: any[][]): db.SessionRow | undefined {
+  const ids = new Set(
+    cookieSets.map((c) => eb.getServerSessionId(env, c)).filter((v): v is string => Boolean(v)),
+  );
+  if (ids.size === 0) return undefined;
+  const shortEnv = eb.getShortEnv(env);
+  return db
+    .getSessions()
+    .filter((s) => s.environment === shortEnv)
+    .find((s) => {
+      try {
+        const sid = eb.getServerSessionId(env, JSON.parse(s.session_cookies));
+        return sid !== undefined && ids.has(sid);
+      } catch {
+        return false;
+      }
+    });
 }
 
 /**
@@ -302,54 +324,104 @@ export async function refreshSessionIfNeeded(
 }
 
 export interface ImportOptions {
-  showBrowser?: boolean | undefined;
   username?: string | undefined;
   account?: string | undefined;
   environment?: string | undefined;
-  profile?: string | undefined;
   chromeDataDir?: string | undefined;
+  /** How long to wait for remote debugging to be enabled and approved (default 2 minutes). */
+  timeoutMs?: number | undefined;
+  /** Injection point for tests. */
+  readCookies?: typeof eb.readChromeCookies | undefined;
+  /** Passed through to finalizeSession. */
+  finalize?: FinalizeOptions | undefined;
 }
 
+/** Picks the environment to import from the ones Chrome has a session for. */
+async function chooseImportEnvironment(
+  detected: eb.Environment[],
+  requested: string | undefined,
+  interactive: boolean,
+): Promise<eb.Environment> {
+  const label = (env: eb.Environment) => eb.getDisplayName(eb.getShortEnv(env));
+  if (requested) {
+    const env = eb.getEnvironment(requested);
+    if (!detected.includes(env)) {
+      throw new Error(
+        `Chrome has no e-Builder session for ${label(env)}.${
+          detected.length ? ` Found: ${detected.map(label).join(', ')}.` : ''
+        } Sign in to ${label(env)} in Chrome first.`,
+      );
+    }
+    return env;
+  }
+  if (detected.length === 0) {
+    throw new Error(
+      'Chrome has no signed-in e-Builder session. Sign in to e-Builder in Chrome, then run this again.',
+    );
+  }
+  if (detected.length === 1) return detected[0]!;
+  if (!interactive) {
+    throw new Error(
+      `Chrome is signed in to several e-Builder environments (${detected.map(label).join(', ')}); pass --environment.`,
+    );
+  }
+  return await select({
+    message: 'Chrome is signed in to several environments. Which one do you want to import?',
+    choices: detected.map((env) => ({ value: env, name: label(env) })),
+  });
+}
+
+/**
+ * Imports the e-Builder session from the user's running Google Chrome (remote debugging must be
+ * allowed at chrome://inspect/#remote-debugging; Chrome asks the user to approve the connection).
+ */
 export async function promptImportAndSaveSession(
   options: ImportOptions = {},
 ): Promise<FinalizedSession> {
-  const env = await resolveEnvironment(
-    options.environment,
-    'Select the e-Builder environment you want to import the session from:',
-  );
+  if (options.environment) eb.getEnvironment(options.environment); // validate early
+  const readCookies = options.readCookies ?? eb.readChromeCookies;
+  const interactive = options.finalize?.interactive ?? isInteractive();
 
-  const showBrowser = options.showBrowser ?? true;
-  const spinner = ora('Importing session from Google Chrome...').start();
-
-  let importResult: eb.ImportSessionResult;
+  const spinner = ora('Connecting to Google Chrome...').start();
+  let cookies: Awaited<ReturnType<typeof eb.readChromeCookies>>;
   try {
-    importResult = await eb.importSessionFromChrome({
-      env,
-      profile: options.profile,
+    cookies = await readCookies({
       chromeDataDir: options.chromeDataDir,
-      headless: !showBrowser,
-      onAccountSelected: (selectedAccount: eb.Account) => {
-        if (!options.account) {
-          options.account = selectedAccount.text;
-        }
+      timeoutMs: options.timeoutMs,
+      onNeedsSetup: () => {
+        spinner.info(
+          `Remote debugging is not enabled in Chrome. In Chrome, open ${eb.REMOTE_DEBUGGING_SETTINGS_URL} and turn on "Allow remote debugging for this browser instance".`,
+        );
+        if (interactive) eb.openRemoteDebuggingSettings();
+        spinner.start('Waiting for remote debugging to be enabled...');
+      },
+      onAwaitingApproval: () => {
+        spinner.text = 'Click "Allow" in Chrome to let eb read your e-Builder session...';
       },
     });
   } catch (e: any) {
     spinner.fail(`Failed to import session from Chrome: ${e.message}`);
     throw e;
   }
-
-  // No spinner while finalizing: it may prompt for missing details.
   spinner.stop();
+
+  const env = await chooseImportEnvironment(
+    eb.detectEnvironments(cookies),
+    options.environment,
+    interactive,
+  );
+
   let saved: FinalizedSession;
   try {
-    saved = await finalizeSession(env, importResult.cookies, {
-      username: options.username || importResult.username,
-      account: options.account || importResult.account,
-    });
+    saved = await finalizeSession(
+      env,
+      eb.cookiesForEnvironment(env, cookies),
+      { username: options.username, account: options.account },
+      options.finalize,
+    );
   } catch (e) {
     if (e instanceof SessionVerificationError) {
-      spinner.fail('Failed to verify imported session.');
+      ora().fail('The e-Builder session in Chrome is no longer valid. Sign in again in Chrome.');
       throw new Error('Login verification failed for imported session.');
     }
     throw e;
@@ -357,13 +429,6 @@ export async function promptImportAndSaveSession(
     await eb.BrowserManager.getInstance().closeBrowser();
   }
 
-  spinner.succeed(
-    describeSaved(
-      importResult.isAlreadyLoggedIn
-        ? 'Active Chrome session imported'
-        : 'Logged in and session imported',
-      saved,
-    ),
-  );
+  ora().succeed(describeSaved('Imported Chrome session', saved));
   return saved;
 }
