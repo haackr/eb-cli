@@ -121,6 +121,7 @@ export class BrowserManager {
   private static instance: BrowserManager;
   private browser: puppeteer.Browser | null = null;
   private currentHeadless: boolean | null = null;
+  private currentInteractive = false;
   /** True when `browser` is a connection to the shared warm-browser daemon (never close it). */
   private isDaemon = false;
 
@@ -168,8 +169,13 @@ export class BrowserManager {
   }
 
   /**
-   * Returns a browser, launching one if needed.
+   * Returns a browser, launching one if needed. Always Puppeteer's bundled Chrome for Testing:
+   * launching the user's installed Google Chrome proved unreliable (blank or missing windows on
+   * Windows), and branded Chrome 137+ ignores `--load-extension` anyway.
    *
+   * @param interactive - A person uses this window (e.g. browser login): the page follows the
+   *   real window size (Puppeteer's 800x600 viewport emulation misplaces native popups such as
+   *   <select> lists) and the "controlled by automated software" banner is hidden.
    * @param options.allowDaemon - Reuse the warm-browser daemon when available (headless only).
    *   Only pass this from callers that do all work inside their own `createBrowserContext()`
    *   and close it, so no cookies or pages persist in the shared browser.
@@ -177,10 +183,10 @@ export class BrowserManager {
   async getBrowser(
     headless: boolean = true,
     args?: string[],
-    useUserChrome: boolean = false,
+    interactive: boolean = false,
     options: { allowDaemon?: boolean } = {},
   ): Promise<puppeteer.Browser> {
-    const wantDaemon = Boolean(options.allowDaemon) && headless && !useUserChrome;
+    const wantDaemon = Boolean(options.allowDaemon) && headless && !interactive;
 
     // Never hand the shared daemon browser to a caller that did not opt in.
     if (this.browser && this.isDaemon && !wantDaemon) {
@@ -204,7 +210,7 @@ export class BrowserManager {
     let needsRelaunch = false;
     if (!this.browser || !this.browser.connected) {
       needsRelaunch = true;
-    } else if (this.currentHeadless !== headless) {
+    } else if (this.currentHeadless !== headless || this.currentInteractive !== interactive) {
       needsRelaunch = true;
     } else {
       // Additional check: try to get browser contexts to verify connection
@@ -230,6 +236,7 @@ export class BrowserManager {
         this.isDaemon = false;
       }
       this.currentHeadless = headless;
+      this.currentInteractive = interactive;
       const requiredArgs = ['--no-sandbox', '--disable-setuid-sandbox'];
       const launchArgs = [...new Set([...(args ?? []), ...requiredArgs])];
 
@@ -240,54 +247,22 @@ export class BrowserManager {
         ignoreDefaults.push('--disable-extensions');
       }
 
+      const launchOpts: puppeteer.LaunchOptions = { headless, args: launchArgs };
+      if (extDir) launchOpts.ignoreDefaultArgs = ignoreDefaults;
+      if (interactive) {
+        launchArgs.push('--disable-blink-features=AutomationControlled');
+        launchOpts.ignoreDefaultArgs = ignoreDefaults;
+        launchOpts.defaultViewport = null;
+      }
+
       try {
-        if (useUserChrome) {
-          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eb-sso-login-browser'));
-          const userChromeArgs = [
-            `--user-data-dir=${tmpDir}`,
-            '--new-window',
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--disable-blink-features=AutomationControlled',
-            '--start-maximized',
-          ];
-          const newLaunchArgs = [...new Set([...launchArgs, ...userChromeArgs])];
-          this.browser = await puppeteer.launch({
-            headless,
-            channel: 'chrome',
-            ignoreDefaultArgs: ignoreDefaults,
-            args: newLaunchArgs,
-            // A person uses this window: let the page follow the real window size. Puppeteer's
-            // default 800x600 viewport emulation misplaces native popups like <select> lists.
-            defaultViewport: null,
-          });
-          this.browser.on('disconnected', () => {
-            try {
-              if (fs.existsSync(tmpDir)) {
-                fs.rmSync(tmpDir, { recursive: true, force: true });
-              }
-            } catch {}
-          });
-        } else {
-          const launchOpts: puppeteer.LaunchOptions = {
-            headless,
-            args: launchArgs,
-          };
-          if (extDir) {
-            launchOpts.channel = 'chrome';
-            launchOpts.ignoreDefaultArgs = ignoreDefaults;
-          }
-          this.browser = await puppeteer.launch(launchOpts);
-        }
+        this.browser = await puppeteer.launch(launchOpts);
       } catch (launchError) {
         console.log('Puppeteer failed to launch browser. Attempting to install Chrome...');
         installChrome();
 
         try {
-          this.browser = await puppeteer.launch({
-            headless,
-            args: launchArgs,
-          });
+          this.browser = await puppeteer.launch(launchOpts);
         } catch (retryError) {
           if (shouldInstallChromeDeps()) {
             console.log(
@@ -296,10 +271,7 @@ export class BrowserManager {
             installChrome(true);
 
             try {
-              this.browser = await puppeteer.launch({
-                headless,
-                args: launchArgs,
-              });
+              this.browser = await puppeteer.launch(launchOpts);
             } catch (dependencyRetryError) {
               throw new Error(
                 `Failed to launch browser after installing Chrome dependencies. Initial error: ${getErrorMessage(launchError)}. Retry error: ${getErrorMessage(dependencyRetryError)}`,
