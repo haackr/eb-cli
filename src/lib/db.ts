@@ -8,6 +8,8 @@ export type SessionRow = {
   username: string;
   environment: string;
   account: string;
+  /** e-Builder account GUID (from the JWT claims); null for sessions saved before it existed. */
+  account_id: string | null;
   session_cookies: string;
   created_at: string;
 };
@@ -40,6 +42,8 @@ let deleteSessionId: Database.Statement;
 let deleteUserSessions: Database.Statement;
 let dbupdateSessionById: Database.Statement;
 let updateSessionCookiesStmt: Database.Statement;
+let updateSessionIdentityStmt: Database.Statement;
+let findSessionsByUserEnvStmt: Database.Statement;
 
 let getCachedSchemaStmt: Database.Statement;
 let setCachedSchemaStmt: Database.Statement;
@@ -67,7 +71,8 @@ function getDbPath(): string {
 
 function prepareStatements() {
   insertSession = db.prepare(`
-    INSERT INTO sessions (username, environment, account, session_cookies) VALUES (?, ?, ?, ?)
+    INSERT INTO sessions (username, environment, account, account_id, session_cookies)
+    VALUES (?, ?, ?, ?, ?)
   `);
   getAllSessions = db.prepare('SELECT * FROM sessions');
   getUserSessions = db.prepare('SELECT * FROM sessions WHERE username = ?');
@@ -78,6 +83,12 @@ function prepareStatements() {
     `UPDATE sessions SET username = ?, environment = ?, account = ?, session_cookies = ? WHERE id = ?`,
   );
   updateSessionCookiesStmt = db.prepare(`UPDATE sessions SET session_cookies = ? WHERE id = ?`);
+  updateSessionIdentityStmt = db.prepare(
+    `UPDATE sessions SET account = ?, account_id = ? WHERE id = ?`,
+  );
+  findSessionsByUserEnvStmt = db.prepare(
+    `SELECT * FROM sessions WHERE lower(username) = lower(?) AND environment = ? ORDER BY id DESC`,
+  );
 
   getCachedSchemaStmt = db.prepare(`
     SELECT data_json FROM schema_cache 
@@ -140,6 +151,14 @@ export function createTables() {
       FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
     );
   `);
+  migrate();
+}
+
+function migrate() {
+  const columns = db.prepare(`PRAGMA table_info(sessions)`).all() as { name: string }[];
+  if (!columns.some((c) => c.name === 'account_id')) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN account_id TEXT`);
+  }
 }
 
 export function initDb(customPath?: string): Database.Database {
@@ -162,8 +181,44 @@ export function addSession(
   environment: string,
   account: string,
   session_cookies: string,
-) {
-  insertSession.run(username, environment, account, session_cookies);
+  account_id?: string | null,
+): number {
+  const info = insertSession.run(
+    username,
+    environment,
+    account,
+    account_id ?? null,
+    session_cookies,
+  );
+  return Number(info.lastInsertRowid);
+}
+
+/** Sets a session's account name and account GUID (identity backfill). */
+export function updateSessionIdentity(id: number, account: string, account_id: string | null) {
+  updateSessionIdentityStmt.run(account, account_id, id);
+}
+
+/**
+ * The stored session that belongs to the same user and account in this environment, if any.
+ * Matches on account GUID when known; otherwise on a non-empty account name (case-insensitive).
+ */
+export function findMatchingSession(
+  username: string,
+  environment: string,
+  identity: { account?: string | undefined; accountId?: string | undefined },
+): SessionRow | undefined {
+  const candidates = findSessionsByUserEnvStmt.all(username, environment) as SessionRow[];
+  if (identity.accountId) {
+    const byId = candidates.find((s) => s.account_id === identity.accountId);
+    if (byId) return byId;
+  }
+  const name = identity.account?.trim().toLowerCase();
+  if (!name) return undefined;
+  return candidates.find(
+    (s) =>
+      (s.account ?? '').trim().toLowerCase() === name &&
+      (!identity.accountId || !s.account_id || s.account_id === identity.accountId),
+  );
 }
 
 export function getSessions(): SessionRow[] {

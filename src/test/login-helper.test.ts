@@ -3,7 +3,13 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { refreshSessionIfNeeded, promptLoginAndSaveSession } from '../lib/login-helper.js';
+import {
+  refreshSessionIfNeeded,
+  promptLoginAndSaveSession,
+  finalizeSession,
+  saveRefreshedSession,
+  SessionVerificationError,
+} from '../lib/login-helper.js';
 import * as db from '../lib/db.js';
 import * as eb from '../lib/eb-puppetmaster/index.js';
 
@@ -141,6 +147,156 @@ describe('Login Helper (src/lib/login-helper.ts)', () => {
         async () => promptLoginAndSaveSession({ environment: 'invalid_env' }),
         /Unknown environment: invalid_env/,
       );
+    });
+  });
+
+  describe('finalizeSession', () => {
+    const verifiedBrowser = (
+      authenticated: boolean,
+      newCookies: any[] = [{ name: 'fresh', value: '1' }],
+    ) =>
+      ({
+        connected: true,
+        createBrowserContext: async () => ({
+          newPage: async () => ({
+            setDefaultNavigationTimeout: () => {},
+            setDefaultTimeout: () => {},
+            url: () =>
+              authenticated
+                ? 'https://app.e-builder.net/da2/Home/index2.aspx'
+                : 'https://app.e-builder.net/Login/Login.aspx?ReturnUrl=%2fda2',
+            goto: async () => ({ status: () => 200 }),
+            waitForSelector: async () => {
+              if (authenticated) return {};
+              throw new Error('Not found');
+            },
+            evaluate: async () => false,
+            $: async () => null,
+          }),
+          setCookie: async () => {},
+          cookies: async () => newCookies,
+          close: async () => {},
+        }),
+      }) as any;
+
+    const identity = (i: Partial<eb.SessionIdentity>) => async () => i;
+
+    it('saves the identity e-Builder reports, ignoring weaker hints', async () => {
+      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(true);
+      const saved = await finalizeSession(
+        eb.Environment.US2,
+        [{ name: 'old', value: '0' }],
+        { username: 'typed', account: 'From dropdown' },
+        {
+          interactive: false,
+          identify: identity({
+            username: 'jane@example.com',
+            accountName: 'Acme',
+            accountId: 'acct-1',
+          }),
+        },
+      );
+      assert.deepStrictEqual(saved, {
+        sessionId: 1,
+        username: 'jane@example.com',
+        account: 'Acme',
+        accountId: 'acct-1',
+        updatedExisting: false,
+      });
+      const row = db.getSessionById(1)!;
+      assert.strictEqual(row.environment, 'us2');
+      assert.strictEqual(row.account_id, 'acct-1');
+      assert.deepStrictEqual(JSON.parse(row.session_cookies), [{ name: 'fresh', value: '1' }]);
+    });
+
+    it('falls back to hints when e-Builder cannot be read', async () => {
+      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(true);
+      const saved = await finalizeSession(
+        eb.Environment.US1,
+        [],
+        { username: 'jane@example.com', account: 'Picked' },
+        { interactive: false, identify: identity({}) },
+      );
+      assert.strictEqual(saved.username, 'jane@example.com');
+      assert.strictEqual(saved.account, 'Picked');
+      assert.strictEqual(saved.accountId, null);
+    });
+
+    it('updates the existing session for the same user and account instead of duplicating', async () => {
+      db.addSession('jane@example.com', 'us2', '', '[]', 'acct-1');
+      db.setCredentialRef(1, 'env', 'e-Builder');
+      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(true);
+      const saved = await finalizeSession(
+        eb.Environment.US2,
+        [],
+        {},
+        {
+          interactive: false,
+          identify: identity({
+            username: 'jane@example.com',
+            accountName: 'Acme',
+            accountId: 'acct-1',
+          }),
+        },
+      );
+      assert.strictEqual(saved.sessionId, 1);
+      assert.strictEqual(saved.updatedExisting, true);
+      assert.strictEqual(db.getSessions().length, 1);
+      assert.strictEqual(db.getSessionById(1)!.account, 'Acme');
+      assert.ok(db.getCredentialRef(1), 'credential ref stays attached');
+    });
+
+    it('throws SessionVerificationError and saves nothing when cookies are not authenticated', async () => {
+      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(false);
+      await assert.rejects(
+        finalizeSession(
+          eb.Environment.US1,
+          [],
+          { username: 'x' },
+          { interactive: false, identify: identity({}) },
+        ),
+        SessionVerificationError,
+      );
+      assert.strictEqual(db.getSessions().length, 0);
+    });
+
+    it('requires a username when it cannot be detected and prompting is off', async () => {
+      eb.BrowserManager.getInstance().getBrowser = async () => verifiedBrowser(true);
+      await assert.rejects(
+        finalizeSession(eb.Environment.US1, [], {}, { interactive: false, identify: identity({}) }),
+        /--username/,
+      );
+    });
+  });
+
+  describe('saveRefreshedSession', () => {
+    it('backfills a blank account name and missing account id', async () => {
+      db.addSession('jane@example.com', 'us2', '', '[]');
+      await saveRefreshedSession(db.getSessionById(1)!, [{ name: 'n', value: '1' }], async () => ({
+        accountName: 'Acme',
+        accountId: 'acct-1',
+      }));
+      const row = db.getSessionById(1)!;
+      assert.strictEqual(row.account, 'Acme');
+      assert.strictEqual(row.account_id, 'acct-1');
+      assert.deepStrictEqual(JSON.parse(row.session_cookies), [{ name: 'n', value: '1' }]);
+    });
+
+    it('keeps a user-set account name and skips lookups once identity is complete', async () => {
+      db.addSession('jane@example.com', 'us2', 'My Nickname', '[]');
+      await saveRefreshedSession(db.getSessionById(1)!, [], async () => ({
+        accountName: 'Acme',
+        accountId: 'acct-1',
+      }));
+      assert.strictEqual(db.getSessionById(1)!.account, 'My Nickname');
+      assert.strictEqual(db.getSessionById(1)!.account_id, 'acct-1');
+
+      let called = false;
+      await saveRefreshedSession(db.getSessionById(1)!, [], async () => {
+        called = true;
+        return {};
+      });
+      assert.strictEqual(called, false);
     });
   });
 });

@@ -49,7 +49,5 @@ export default class SessionImport extends Command {
       profile: flags.profile,
       chromeDataDir: flags['chrome-data-dir'],
     });
-
-    this.log('Session saved!');
   }
 }

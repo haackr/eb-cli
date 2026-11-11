@@ -83,17 +83,11 @@ export default class Login extends Command {
       };
     }
 
-    await promptLoginAndSaveSession(options);
+    const saved = await promptLoginAndSaveSession(options);
 
     if (flags.provider && itemRef) {
       const db = await import('../lib/db.js');
-      const allSessions = db.getSessions();
-      if (allSessions.length > 0) {
-        const latest = [...allSessions].sort((a, b) => b.id - a.id)[0]!;
-        db.setCredentialRef(latest.id, flags.provider, itemRef, flags.vault);
-      }
+      db.setCredentialRef(saved.sessionId, flags.provider, itemRef, flags.vault);
     }
-
-    this.log(`Session saved!`);
   }
 }

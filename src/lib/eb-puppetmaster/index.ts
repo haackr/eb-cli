@@ -9,6 +9,7 @@ export * from './project.js';
 export * from './process.js';
 export * from './exec.js';
 export * from './session-check.js';
+export * from './session-identity.js';
 export * from './browser-daemon.js';
 
 export enum Environment {
