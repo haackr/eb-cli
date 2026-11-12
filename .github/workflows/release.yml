@@ -20,6 +20,9 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # Marked latest by mark-latest once every installer is uploaded, so the
+          # releases/latest/download/... links never point at a release without installers.
+          make_latest: false
 
   oclif-release:
     needs: create-release
@@ -86,6 +89,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: false
           files: |
             dist/*${{ matrix.target }}*.tar.gz
             dist/*${{ matrix.target }}*.tar.xz
@@ -179,14 +183,17 @@ jobs:
             pack_cmd: win
             artifact_path: dist/win32/*.exe
             artifact_name: win-installer
+            stable_platform: windows
           - os: macos-latest
             pack_cmd: macos
             artifact_path: dist/macos/*.pkg
             artifact_name: macos-installer
+            stable_platform: macos
           - os: ubuntu-latest
             pack_cmd: deb
             artifact_path: dist/deb/*.deb
             artifact_name: deb-installer
+            stable_platform: linux
 
     steps:
       - name: Checkout code
@@ -225,9 +232,31 @@ jobs:
           fi
           npx oclif pack ${{ matrix.pack_cmd }}
 
+      # Version-free copies (eb-macos-arm64.pkg, eb-windows-x64.exe, eb-linux-amd64.deb, ...)
+      # so https://github.com/<repo>/releases/latest/download/<name> always gets the newest.
+      - name: Copy installers to stable names
+        shell: bash
+        run: bash scripts/stable-installer-names.sh "${{ matrix.stable_platform }}" dist/stable ${{ matrix.artifact_path }}
+
       - name: Upload installer to release assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: ${{ matrix.artifact_path }}
+          make_latest: false
+          files: |
+            ${{ matrix.artifact_path }}
+            dist/stable/*
+
+  mark-latest:
+    name: Mark Release Latest
+    # Only after every installer and tarball is attached; a failed build leaves the previous
+    # release as latest, so the evergreen links keep working.
+    needs: [oclif-release, native-installers]
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark release latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --latest
