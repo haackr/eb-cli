@@ -122,4 +122,47 @@ describe('Process Schema & Caching (src/lib/eb-puppetmaster/process-schema.ts)',
     assert.strictEqual(result.name, 'Invoice');
     assert.strictEqual(result.dataFields[0].name, 'Amount');
   });
+
+  it('ProcessInspect --markdown -o writes Markdown documentation from the cache', async () => {
+    db.addSession('bob@example.com', 'us1', 'Acct2', '[]');
+    saveCachedProcessSchema('us1', 'Acct2', 'Invoice', {
+      name: 'Invoice',
+      prefix: 'INV',
+      workflowSteps: [
+        {
+          id: 's1',
+          name: 'Start',
+          type: 'Start',
+          actions: ['Submit'],
+          actionDetails: [{ name: 'Submit', to: 'Finish', toStepId: 's2' }],
+        },
+        { id: 's2', name: 'Finish', type: 'Finish', actions: [], actionDetails: [] },
+      ],
+      dataFields: [{ name: 'Amount', type: 'Currency', required: true }],
+      layoutMatrix: {},
+    });
+    const file = path.join(tmpDir, 'invoice.md');
+    const result: any = await ProcessInspect.run([
+      'Invoice',
+      '-A',
+      'Acct2',
+      '--markdown',
+      '-o',
+      file,
+      '--json',
+    ]);
+    assert.strictEqual(result.outputFile, file);
+    const md = fs.readFileSync(file, 'utf8');
+    assert.strictEqual(md, result.markdown);
+    assert.match(md, /^# Invoice \(INV\)/);
+    assert.ok(md.includes('  s0 -->|"Submit"| s1'));
+    assert.ok(md.includes('| Amount |  | Currency | Yes |  |'));
+  });
+
+  it('ProcessInspect rejects --markdown with --compact', async () => {
+    await assert.rejects(
+      ProcessInspect.run(['Invoice', '--markdown', '--compact']),
+      /cannot also be provided/,
+    );
+  });
 });

@@ -15,6 +15,7 @@ import {
   fetchProcessSchema,
   PROCESS_SCHEMA_VERSION,
 } from '../../lib/eb-puppetmaster/process-schema.js';
+import { processSchemaToMarkdown } from '../../lib/eb-puppetmaster/process-schema-doc.js';
 import { MockEBuilder } from './mock-ebuilder.js';
 
 const tabular: ReportConfig = {
@@ -289,6 +290,30 @@ describe('Report wizard driver against a mock e-Builder (report.ts / report-wiza
         ],
         layouts: ['01 - Start', '99 - View Only'],
       });
+    });
+
+    it('renders the schema as Markdown documentation', async () => {
+      const schema = await fetchProcessSchema({ ...base(), processName: 'rfi', useCache: false });
+      const md = processSchemaToMarkdown(schema);
+      const has = (text: string) =>
+        assert.ok(md.includes(text), `missing:\n${text}\n--- in ---\n${md}`);
+      assert.match(md, /^# RFI \(RFI\)\n/);
+      // Steps follow the workflow from Start; Finish is last.
+      assert.deepStrictEqual(
+        [...md.matchAll(/^### \d+\. (.+)$/gm)].map((m) => m[1]),
+        ['Start', 'Answer', 'Answered?', 'Finish'],
+      );
+      has('```mermaid\nflowchart TD\n  s0(["Start"])\n  s1["Answer"]\n  s2{"Answered?"}');
+      has('  s1 -->|"Reject"| s0');
+      assert.ok(!md.includes('-->|"false"|'), 'unconnected branches get no edge');
+      has('- **Condition:** `[Answer]<>""`');
+      has('| Reject (comment required) | Start | Rejected |  |');
+      has('| false | _not connected_ |  |');
+      has('- Internal Notes = `"Re: "&[Answer]&{DataField.eeeeeeee-0000-4000-8000-000000000009}`');
+      has('**Reject** can add: Owner');
+      has('| Question | Question | Text Block | Yes | All |');
+      has('| Field | 01 - Start | 99 - View Only |');
+      has('| Answer | – | Read |');
     });
 
     it('matches processes by prefix and variable name', async () => {
