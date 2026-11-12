@@ -635,10 +635,21 @@ export class MockEBuilder {
     }
     if (path === '/da2/Processes/ProcessesService.asmx/GetWorkflowData') {
       const [l1, l2] = PROCESS.layouts;
+      const Z = '00000000-0000-0000-0000-000000000000';
       const xml = `<ebWorkflow><Steps>
-        <ebStep StepID="s1" Name="Start" StepType="Start" ActorLayoutID="${l1!.id}" NonActorLayoutID="00000000-0000-0000-0000-000000000000"><Actions><ebAction Name="Submit" ButtonText="Submit"/></Actions></ebStep>
-        <ebStep StepID="s2" Name="Answer" StepType="DataEntry" ActorLayoutID="${l2!.id}"><Actions><ebAction Name="Respond" ButtonText="Respond"/><ebAction Name="Reject" ButtonText="Reject"/></Actions></ebStep>
-        <ebStep StepID="s3" Name="Finish" StepType="Finish"><Actions/></ebStep></Steps></ebWorkflow>`;
+        <ebStep StepID="s1" Name="Start" StepType="Start" ActorLayoutID="${l1!.id}" NonActorLayoutID="${Z}" ConditionalBranchExpression="" SpawnProcessID=""><Actors/><Actions><ebAction ActionID="a1" Name="Submit" ButtonText="Submit" Status="Projected"><DataFieldAssignments/><ActionRoles/></ebAction></Actions></ebStep>
+        <ebStep StepID="s2" Name="Answer" StepType="DataEntry" ActorLayoutID="${l2!.id}" ConditionalBranchExpression="" SpawnProcessID=""><Actors><ebActor RoleID="${Z}" ParticipantType="PersonTakingAction" ParticipantInStepID="s1"/><ebActor RoleID="rrrrrrrr-0000-4000-8000-000000000001" RoleName="Architect" ParticipantType="None" ParticipantInStepID="${Z}"/></Actors><Actions>
+          <ebAction ActionID="a2" Name="Respond" ButtonText="Respond" Status="NotAssigned"><DataFieldAssignments><ebDataFieldAssignment DataFieldID="dddddddd-0000-4000-8000-000000000003" DataFieldName="Internal Notes" AssignmentExpression="&quot;Re: &quot;&amp;{DataField.dddddddd-0000-4000-8000-000000000002}&amp;{DataField.eeeeeeee-0000-4000-8000-000000000009}"/></DataFieldAssignments><ActionRoles/></ebAction>
+          <ebAction ActionID="a3" Name="Reject" ButtonText="Reject" Status="Rejected" RequireComments="true"><DataFieldAssignments/><ActionRoles><ebActionRole RoleID="rrrrrrrr-0000-4000-8000-000000000002" RoleName="Owner" Type="AdditionalActor"/></ActionRoles></ebAction></Actions><NotifyRoles><ebNotifyRole RoleID="rrrrrrrr-0000-4000-8000-000000000003"/></NotifyRoles></ebStep>
+        <ebStep StepID="s4" Name="Answered?" StepType="Conditional" ConditionalBranchExpression="{DataField.dddddddd-0000-4000-8000-000000000002}&lt;&gt;&quot;&quot;" SpawnProcessID=""><Actors/><Actions><ebAction ActionID="a4" Name="true" ButtonText="true" ConditionalBranchExpressionValue="true" Status="NotAssigned"><DataFieldAssignments/></ebAction><ebAction ActionID="a5" Name="false" ButtonText="false" ConditionalBranchExpressionValue="false" Status="NotAssigned"><DataFieldAssignments/></ebAction></Actions></ebStep>
+        <ebStep StepID="s3" Name="Finish" StepType="Finish"><Actions/></ebStep></Steps>
+        <Connectors>
+          <ebConnector ActionID="a1" FromStepID="s1" ToStepID="s2"/>
+          <ebConnector ActionID="a2" FromStepID="s2" ToStepID="s4"/>
+          <ebConnector ActionID="a3" FromStepID="s2" ToStepID="s1"/>
+          <ebConnector ActionID="a4" FromStepID="s4" ToStepID="s3"/>
+          <ebConnector ActionID="a5" FromStepID="s4" ToStepID="${Z}"/>
+        </Connectors></ebWorkflow>`;
       return this.send(res, JSON.stringify({ d: { xml, isActive: true } }), 'application/json');
     }
 

@@ -21,11 +21,48 @@ export interface ProcessDataFieldSchema {
   defaultValue?: string | undefined;
 }
 
+export interface ProcessDataFieldAssignment {
+  /** Label of the field the action sets. */
+  field: string;
+  fieldId?: string | undefined;
+  /** e-Builder formula; `{DataField.<guid>}` references are rewritten to `[Field Label]` when known. */
+  expression: string;
+}
+
+export interface ProcessWorkflowActionSchema {
+  id?: string | undefined;
+  /** Button text (falls back to the action name). */
+  name: string;
+  /** Name of the step this action leads to (absent when the action is not connected). */
+  to?: string | undefined;
+  toStepId?: string | undefined;
+  /** On a Conditional step: the branch of the step's `condition` this action follows. */
+  conditionResult?: boolean | undefined;
+  /** Process status the action sets (omitted when it does not change the status). */
+  status?: string | undefined;
+  requireComments?: boolean | undefined;
+  /** Roles offered as additional actors / non-actors by this action. */
+  additionalRoles?: string[] | undefined;
+  /** Data field assignments run when the action is taken, in order. */
+  assignments?: ProcessDataFieldAssignment[] | undefined;
+}
+
 export interface ProcessWorkflowStepSchema {
   id?: string | undefined;
   name: string;
   type: string;
+  /** Action labels (kept for compatibility; see `actionDetails`). */
   actions: string[];
+  /** Actions with their target step, branch, status, and field assignments. */
+  actionDetails?: ProcessWorkflowActionSchema[] | undefined;
+  /** Conditional steps: the branch expression (field references rewritten like assignments). */
+  condition?: string | undefined;
+  /** Who acts on the step: role names (or role IDs), or "person who took action at <step>". */
+  actors?: string[] | undefined;
+  /** Roles notified when the step starts. */
+  notifyRoles?: string[] | undefined;
+  /** Spawn steps: the process that is spawned (name when known, else ProcessID). */
+  spawnProcess?: string | undefined;
   actorLayout?: string | undefined;
   nonActorLayout?: string | undefined;
 }
@@ -48,7 +85,14 @@ export interface ProcessWorkflowSummary {
 
 export type LayoutFieldAccess = 'required' | 'editable' | 'readonly' | 'hidden';
 
+/**
+ * Bumped when fetchProcessSchema starts collecting new data, so cached schemas from older
+ * versions are refetched instead of silently missing it.
+ */
+export const PROCESS_SCHEMA_VERSION = 2;
+
 export interface ProcessSchema {
+  schemaVersion?: number | undefined;
   processId?: string | undefined;
   /** @deprecated Alias of processId (pre-0.2 name). */
   processTypeId?: string | undefined;
@@ -96,6 +140,7 @@ export function getCachedProcessSchema(
   if (!json) return undefined;
   try {
     const schema = JSON.parse(json) as ProcessSchema;
+    if (schema.schemaVersion !== PROCESS_SCHEMA_VERSION) return undefined;
     // Entries are stored under several identifiers; a key can collide (one process's name
     // equal to another's prefix). Only use the entry if it identifies this exact process,
     // or it was cached for this exact request (e.g. a unique partial name).
@@ -121,6 +166,7 @@ export function saveCachedProcessSchema(
 ): void {
   const payload = JSON.stringify({
     ...schema,
+    schemaVersion: PROCESS_SCHEMA_VERSION,
     cachedAt: new Date().toISOString(),
     cachedFor: processName,
   });
@@ -187,7 +233,7 @@ export async function fetchProcessSchema(options: {
     await injectEbHelper(page);
 
     const result = await page.evaluate(
-      async (target: string, maxLayouts: number) => {
+      async (target: string, maxLayouts: number, schemaVersion: number) => {
         const eb = (window as any).eb;
         const clean = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
         const guidOf = (href: string, param: string) =>
@@ -320,7 +366,7 @@ export async function fetchProcessSchema(options: {
         );
         const layoutNameById = Object.fromEntries(layouts.map((l) => [l.id, l.name]));
 
-        // 4. Default workflow → steps.
+        // 4. Default workflow → steps, connectors (action → next step), and field assignments.
         const defaultWorkflow =
           workflows.find((w) => /account default/i.test(w.projectAssignments ?? '')) ??
           workflows[0];
@@ -329,16 +375,100 @@ export async function fetchProcessSchema(options: {
           try {
             const wf = await eb.getWorkflowData(pid, defaultWorkflow.id);
             const doc = xml(wf.xml);
-            workflowSteps = Array.from(doc.getElementsByTagName('ebStep')).map((s) => {
-              const actor = (s.getAttribute('ActorLayoutID') ?? '').toLowerCase();
-              const nonActor = (s.getAttribute('NonActorLayoutID') ?? '').toLowerCase();
+            const isNullGuid = (g: string | null | undefined) => !g || /^[0-]+$/.test(g);
+            const lower = (g: string | null | undefined) =>
+              (g ?? '').toLowerCase().replace(/[{}]/g, '');
+            const stepEls = Array.from(doc.getElementsByTagName('ebStep'));
+            const stepNameById: Record<string, string> = Object.fromEntries(
+              stepEls.map((s) => [lower(s.getAttribute('StepID')), s.getAttribute('Name') ?? '']),
+            );
+            const connectorByAction: Record<string, string> = {};
+            for (const c of Array.from(doc.getElementsByTagName('ebConnector'))) {
+              const to = lower(c.getAttribute('ToStepID'));
+              if (!isNullGuid(to)) connectorByAction[lower(c.getAttribute('ActionID'))] = to;
+            }
+            // Field GUID → label, from the layouts plus the assignment targets themselves.
+            const fieldNameById: Record<string, string> = {};
+            for (const [name, id] of Object.entries(fieldIds)) fieldNameById[lower(id)] = name;
+            for (const a of Array.from(doc.getElementsByTagName('ebDataFieldAssignment'))) {
+              const id = lower(a.getAttribute('DataFieldID'));
+              const name = a.getAttribute('DataFieldName');
+              if (!isNullGuid(id) && name) fieldNameById[id] ??= name;
+            }
+            const readable = (expr: string) =>
+              expr.replace(/\{DataField\.\{?([0-9a-f-]{36})\}?\}/gi, (m, id: string) =>
+                fieldNameById[id.toLowerCase()] ? `[${fieldNameById[id.toLowerCase()]}]` : m,
+              );
+            const roleLabel = (el: Element) =>
+              el.getAttribute('RoleName') || `role ${lower(el.getAttribute('RoleID'))}`;
+            const kids = (el: Element, container: string, tag: string) =>
+              Array.from(el.children)
+                .filter((c) => c.tagName === container)
+                .flatMap((c) => Array.from(c.children).filter((k) => k.tagName === tag));
+            const processNameById: Record<string, string> = Object.fromEntries(
+              processes.map((p) => [p.id, p.name]),
+            );
+
+            workflowSteps = stepEls.map((s) => {
+              const actor = lower(s.getAttribute('ActorLayoutID'));
+              const nonActor = lower(s.getAttribute('NonActorLayoutID'));
+              const type = s.getAttribute('StepType') ?? '';
+              const actionEls = kids(s, 'Actions', 'ebAction');
+              const actionDetails = actionEls.map((a) => {
+                const toStepId = connectorByAction[lower(a.getAttribute('ActionID'))];
+                const status = a.getAttribute('Status');
+                const assignments = kids(a, 'DataFieldAssignments', 'ebDataFieldAssignment').map(
+                  (f) => {
+                    const fieldId = lower(f.getAttribute('DataFieldID'));
+                    return {
+                      field:
+                        f.getAttribute('DataFieldName') ||
+                        fieldNameById[fieldId] ||
+                        f.getAttribute('AssignToFieldName') ||
+                        fieldId,
+                      ...(isNullGuid(fieldId) ? {} : { fieldId }),
+                      expression: readable(f.getAttribute('AssignmentExpression') ?? ''),
+                    };
+                  },
+                );
+                const additionalRoles = kids(a, 'ActionRoles', 'ebActionRole').map(roleLabel);
+                return {
+                  id: lower(a.getAttribute('ActionID')) || undefined,
+                  name: a.getAttribute('ButtonText') || a.getAttribute('Name') || '',
+                  to: toStepId ? stepNameById[toStepId] || toStepId : undefined,
+                  toStepId,
+                  conditionResult:
+                    type === 'Conditional'
+                      ? a.getAttribute('ConditionalBranchExpressionValue') === 'true'
+                      : undefined,
+                  status: status && status !== 'NotAssigned' ? status : undefined,
+                  requireComments: a.getAttribute('RequireComments') === 'true' || undefined,
+                  additionalRoles: additionalRoles.length ? additionalRoles : undefined,
+                  assignments: assignments.length ? assignments : undefined,
+                };
+              });
+              const actors = kids(s, 'Actors', 'ebActor').map((a) => {
+                const inStep = lower(a.getAttribute('ParticipantInStepID'));
+                if (
+                  a.getAttribute('ParticipantType') === 'PersonTakingAction' &&
+                  !isNullGuid(inStep)
+                )
+                  return `person who took action at ${stepNameById[inStep] || inStep}`;
+                return roleLabel(a);
+              });
+              const notifyRoles = kids(s, 'NotifyRoles', 'ebNotifyRole').map(roleLabel);
+              const spawnId = lower(s.getAttribute('SpawnProcessID'));
+              const condition = s.getAttribute('ConditionalBranchExpression');
               return {
                 id: s.getAttribute('StepID') ?? undefined,
                 name: s.getAttribute('Name') ?? '',
-                type: s.getAttribute('StepType') ?? '',
-                actions: Array.from(s.getElementsByTagName('ebAction')).map(
-                  (a) => a.getAttribute('ButtonText') || a.getAttribute('Name') || '',
-                ),
+                type,
+                actions: actionDetails.map((a) => a.name),
+                actionDetails,
+                condition: condition ? readable(condition) : undefined,
+                actors: actors.length ? actors : undefined,
+                notifyRoles: notifyRoles.length ? notifyRoles : undefined,
+                spawnProcess: isNullGuid(spawnId) ? undefined : processNameById[spawnId] || spawnId,
                 actorLayout: layoutNameById[actor] || undefined,
                 nonActorLayout: layoutNameById[nonActor] || undefined,
               };
@@ -352,6 +482,7 @@ export async function fetchProcessSchema(options: {
 
         return {
           schema: {
+            schemaVersion,
             processId: pid,
             processTypeId: pid,
             name: proc.name,
@@ -376,6 +507,7 @@ export async function fetchProcessSchema(options: {
       },
       processName,
       MAX_LAYOUTS,
+      PROCESS_SCHEMA_VERSION,
     );
 
     if ('error' in result) throw new Error(result.error);
@@ -394,7 +526,10 @@ export interface CompactProcessSchema {
   prefix?: string | undefined;
   /** "Label (Type)" with a trailing * when required on any layout. */
   fields: string[];
-  /** "Step [Type]: Action1 | Action2". */
+  /**
+   * "Step [Type]: Action1 -> Next | Action2 -> Other {sets Field A, Field B}".
+   * Conditional steps read "Step [Conditional: <expression>]: true -> X | false -> Y".
+   */
   steps: string[];
   layouts: string[];
 }
@@ -406,9 +541,19 @@ export function compactProcessSchema(schema: ProcessSchema): CompactProcessSchem
     processId: schema.processId ?? schema.processTypeId,
     prefix: schema.prefix,
     fields: schema.dataFields.map((f) => `${f.name} (${f.type})${f.required ? '*' : ''}`),
-    steps: schema.workflowSteps.map(
-      (s) => `${s.name} [${s.type}]${s.actions.length ? `: ${s.actions.join(' | ')}` : ''}`,
-    ),
+    steps: schema.workflowSteps.map((s) => {
+      const actions = s.actionDetails
+        ? s.actionDetails.map((a) => {
+            const sets = a.assignments?.length
+              ? ` {sets ${a.assignments.map((f) => f.field).join(', ')}}`
+              : '';
+            return `${a.name}${a.to ? ` -> ${a.to}` : ''}${sets}`;
+          })
+        : s.actions;
+      const type = s.condition ? `${s.type}: ${s.condition}` : s.type;
+      const spawn = s.spawnProcess ? ` (spawns ${s.spawnProcess})` : '';
+      return `${s.name} [${type}]${spawn}${actions.length ? `: ${actions.join(' | ')}` : ''}`;
+    }),
     layouts: schema.layouts?.map((l) => l.name) ?? Object.keys(schema.layoutMatrix),
   };
 }

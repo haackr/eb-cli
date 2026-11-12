@@ -13,6 +13,7 @@ import {
 import {
   compactProcessSchema,
   fetchProcessSchema,
+  PROCESS_SCHEMA_VERSION,
 } from '../../lib/eb-puppetmaster/process-schema.js';
 import { MockEBuilder } from './mock-ebuilder.js';
 
@@ -230,16 +231,62 @@ describe('Report wizard driver against a mock e-Builder (report.ts / report-wiza
         [
           ['Start', 'Start', ['Submit'], '01 - Start'],
           ['Answer', 'DataEntry', ['Respond', 'Reject'], '99 - View Only'],
+          ['Answered?', 'Conditional', ['true', 'false'], undefined],
           ['Finish', 'Finish', [], undefined],
         ],
       );
+      const [start, answer, cond] = schema.workflowSteps;
+      assert.deepStrictEqual(start!.actionDetails, [
+        { id: 'a1', name: 'Submit', to: 'Answer', toStepId: 's2', status: 'Projected' },
+      ]);
+      assert.deepStrictEqual(answer!.actors, ['person who took action at Start', 'Architect']);
+      assert.deepStrictEqual(answer!.notifyRoles, ['role rrrrrrrr-0000-4000-8000-000000000003']);
+      assert.deepStrictEqual(answer!.actionDetails, [
+        {
+          id: 'a2',
+          name: 'Respond',
+          to: 'Answered?',
+          toStepId: 's4',
+          assignments: [
+            {
+              field: 'Internal Notes',
+              fieldId: 'dddddddd-0000-4000-8000-000000000003',
+              // Known field GUIDs become [Label]; unknown ones are left as-is.
+              expression: '"Re: "&[Answer]&{DataField.eeeeeeee-0000-4000-8000-000000000009}',
+            },
+          ],
+        },
+        {
+          id: 'a3',
+          name: 'Reject',
+          to: 'Start',
+          toStepId: 's1',
+          status: 'Rejected',
+          requireComments: true,
+          additionalRoles: ['Owner'],
+        },
+      ]);
+      assert.strictEqual(cond!.condition, '[Answer]<>""');
+      assert.deepStrictEqual(
+        cond!.actionDetails!.map((a) => [a.name, a.conditionResult, a.to]),
+        [
+          ['true', true, 'Finish'],
+          ['false', false, undefined],
+        ],
+      );
+      assert.strictEqual(schema.schemaVersion, PROCESS_SCHEMA_VERSION);
 
       assert.deepStrictEqual(compactProcessSchema(schema), {
         name: 'RFI',
         processId: 'aaaaaaaa-0000-4000-8000-000000000001',
         prefix: 'RFI',
         fields: ['Question (Text Block)*', 'Answer (Text Block)', 'Internal Notes (Text)'],
-        steps: ['Start [Start]: Submit', 'Answer [DataEntry]: Respond | Reject', 'Finish [Finish]'],
+        steps: [
+          'Start [Start]: Submit -> Answer',
+          'Answer [DataEntry]: Respond -> Answered? {sets Internal Notes} | Reject -> Start',
+          'Answered? [Conditional: [Answer]<>""]: true -> Finish | false',
+          'Finish [Finish]',
+        ],
         layouts: ['01 - Start', '99 - View Only'],
       });
     });

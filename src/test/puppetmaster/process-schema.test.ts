@@ -93,6 +93,18 @@ describe('Process Schema & Caching (src/lib/eb-puppetmaster/process-schema.ts)',
     assert.strictEqual(getCachedProcessSchema('us2', 'Other', 'RFI'), undefined);
   });
 
+  it('ignores cached schemas written by an older schema version', () => {
+    const stale = JSON.stringify({
+      name: 'Old',
+      prefix: 'OLD',
+      workflowSteps: [{ name: 'Start', type: 'Start', actions: ['Submit'] }],
+      dataFields: [],
+      layoutMatrix: {},
+    });
+    db.setCachedSchema('app-us2', 'Acct', 'process', 'old', stale);
+    assert.strictEqual(getCachedProcessSchema('us2', 'Acct', 'Old'), undefined);
+  });
+
   it('ProcessInspect command returns cached schema instantly with --cached and --json', async () => {
     db.addSession('alice@example.com', 'us1', 'Acct1', '[]');
     const cachedData: ProcessSchema = {
