@@ -21,6 +21,33 @@ describe('Agent Guide Command (src/commands/agent/guide.ts)', () => {
     assert.match(result.standardPaths.workflowDataRpc, /\/da2\/Processes\/ProcessesService\.asmx/);
     assert.match(result.workflows.puppeteerEvaluation.description, /async \(\{ page/);
     assert.match(result.workflows.sessionSelection.description, /--account/);
+    assert.match(result.version, /^1\.2\./);
+    assert.match(
+      result.workflows.processSchema.output.actionDetails,
+      /next step.*assignments/,
+      'process schema section describes transitions and field assignments',
+    );
+  });
+
+  it('documents every eb command', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const commandsDir = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../commands',
+    );
+    const commandIds = (fs.readdirSync(commandsDir, { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.js'))
+      .map((f) => f.replace(/\.js$/, '').split(path.sep).join(' '))
+      .filter((id) => id !== 'agent guide');
+    const guide = JSON.stringify(await AgentGuide.run(['--json']));
+    const missing = commandIds.filter((id) => !guide.includes(`eb ${id}`));
+    assert.deepStrictEqual(
+      missing,
+      [],
+      `commands missing from the agent guide: ${missing.join(', ')}`,
+    );
   });
 
   it('outputs formatted markdown guide without --json', async () => {

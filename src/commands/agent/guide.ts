@@ -55,7 +55,7 @@ export default class AgentGuide extends Command {
 
     const guideData = {
       name: 'eb-cli-agent-guide',
-      version: '1.1.0',
+      version: '1.2.0',
       description:
         'Official operational manual for AI agents automating Trimble e-Builder via eb-cli',
       workflows: {
@@ -83,6 +83,32 @@ export default class AgentGuide extends Command {
             'Select a session by account name rather than numeric ID: --account prod, --account uat, or -A "Acme - Production" (case-insensitive substring). --session-id <n> and --username <u> also work. With none, the newest session is used non-interactively.',
           example: 'eb session exec --account uat ./script.js --json',
         },
+        processSchema: {
+          description:
+            'Read how a process is built (read-only, Setup pages): data fields, page layouts with per-layout field access, and the default workflow as a graph. Use this before scripting against eb.getWorkflowData or guessing at a workflow.',
+          commands: {
+            'eb process inspect <process> [--refresh] [--json]':
+              'Full schema. <process> is a name (exact, then unique partial), prefix, variable name, or ProcessID. Alias: eb process schema.',
+            'eb process inspect <process> --compact':
+              'One line per field and step, e.g. "Review [DataEntry]: Approve -> Finish {sets Approved Date} | Revise -> Start".',
+            'eb process inspect <process> --markdown [-o file.md]':
+              'Human-readable documentation for people: Mermaid workflow diagram, each step with its actions, next steps and field assignments, the data field table, and field access by layout.',
+          },
+          output: {
+            dataFields:
+              'label, variableName, type, permission, unique, required (on any layout), id when known.',
+            layoutMatrix: 'layout name -> field label -> required | editable | readonly | hidden.',
+            workflowSteps:
+              'Per step: name, type (Start, DataEntry, Conditional, Automated, Spawn, Finish), actors (role names/IDs or "person who took action at <step>"), notifyRoles, actor/non-actor layout, condition (Conditional steps), spawnProcess (Spawn steps), and actionDetails.',
+            actionDetails:
+              'Per action: name (button text), to (next step; absent when unconnected), conditionResult (true/false branch on Conditional steps), status it sets, requireComments, additionalRoles, and assignments [{ field, fieldId, expression }] run when the action is taken.',
+          },
+          rules: [
+            'Results are cached per environment/account; pass --refresh after the process is changed in Setup.',
+            'In expressions and conditions, known fields appear as [Field Label]; unresolved ones stay as {DataField.<guid>}.',
+            'Only the account-default workflow (or the first one) is read; other workflows are listed by name only.',
+          ],
+        },
         processUse: {
           description:
             'Start processes, take workflow actions, and set fields with dedicated commands (no scripting needed). All accept --json; instances can be given by InstanceID or by name ("RFI - 12") with --project.',
@@ -100,6 +126,8 @@ export default class AgentGuide extends Command {
               'Take a workflow action. Some actions require --comment.',
             'eb process accept <instance>': 'Accept ownership of a role-assigned step.',
             'eb process submit <draft-id> [-F ...]': 'Submit a draft.',
+            'eb process setnullfield <file.csv> [--dry-run] [-o results.csv]':
+              'Bulk-blank fields. CSV has a header row; column 1 is the InstanceID, the remaining cells in each row are field labels to clear.',
           },
           rules: [
             'Always `eb process view` first: it lists the exact action names and which fields are editable at this step.',
@@ -124,11 +152,96 @@ export default class AgentGuide extends Command {
             'Saving posts the whole Project Details form; a project with invalid required details fields fails to save and the error is reported.',
           ],
         },
+        reports: {
+          description: 'Find, run, and copy e-Builder reports.',
+          commands: {
+            'eb reports list [--category c] [--search q] [--refresh]':
+              'Report catalog with IDs (cached; --refresh to reload). Alias: eb reports catalog.',
+            'eb reports run <reportId> [--limit 50] [--format json|csv] [-o file]':
+              'Run a report. JSON output is capped at --limit rows; use --format csv -o file for the full export. Alias: eb reports execute.',
+            'eb reports export-config <reportId> [-o config.json]':
+              'Portable JSON definition of a report (type, columns, filters, sorts, groupings, sharing; `warnings` lists anything that could not be captured, e.g. formula columns). Read-only. Alias: eb reports export.',
+            'eb reports import-config <config.json> [--name n] [--folder f]':
+              "Create a NEW report from an exported definition in the selected session's account. Alias: eb reports import.",
+            'eb reports copy --from-session <id> --to-session <id> --report-id <id> [--name n]':
+              'Export from one session and create the report in another (e.g. UAT to production).',
+          },
+          rules: [
+            'list, run, and export-config are read-only. import-config and copy create a report in the target account; confirm the target session first (eb session list).',
+          ],
+        },
+        users: {
+          description:
+            'Bulk user administration from CSV files. Every command except sso-report changes or deletes account data.',
+          commands: {
+            'eb users sso-report [-o file.csv] [--overwrite]':
+              'Read-only: CSV of every user in Manage Users and whether SSO is required.',
+            'eb users setfield <file.csv> [--dry-run] [-o results.csv]':
+              'Set built-in or custom user fields. Columns: userId, then one column per field, named by the field label.',
+            'eb users setsso <file.csv> [--dry-run] [-o results.csv]':
+              'Turn "SSO required" on/off. Columns: userId (or userName), sso (true/false, yes/no, 1/0, on/off).',
+            'eb users remove-project <file.csv> [--dry-run] [-o results.csv]':
+              'Remove users from projects. Columns: projectName, userName (or email).',
+            'eb users remove-project-role <file.csv> [--dry-run] [-o results.csv]':
+              'Remove users from a project role. Columns: projectName, roleName, userName (or email).',
+            'eb users delete <file.csv> [--dry-run] [-o results.csv]':
+              'DELETE users from the account. Column: userName (or email / userId).',
+          },
+          rules: [
+            'Run with --dry-run first and show the user the result; only run for real with explicit consent.',
+            'users delete cannot be undone from the CLI. Confirm the account (eb session list) before running it.',
+            'Column headers are matched loosely (userName, username, "user name", email, ...). -o writes a per-row results CSV; -v prints per-row progress.',
+          ],
+        },
+        budgetItems: {
+          description: 'Bulk budget line item changes from CSV files.',
+          commands: {
+            'eb budgetitems set <file.csv> [--dry-run] [-o results.csv]':
+              'Set allowCharges, approvalRequiredForChange (true/false), and/or description per item.',
+            'eb budgetitems delete <file.csv> [--dry-run] [-o results.csv]':
+              'DELETE budget line items.',
+          },
+          rules: [
+            'Each row identifies the project (portalId or projectName) and the item (itemId or accountCode); budgetId is optional.',
+            'Run with --dry-run first; delete only with explicit consent.',
+          ],
+        },
+        apiLogs: {
+          description: "Export the account's e-Builder API logs (read-only).",
+          commands: {
+            'eb apilogs download [--from-date YYYY-MM-DD] [--to-date YYYY-MM-DD] [--pages 10] [-o file.jsonl] [--overwrite]':
+              "One JSON record per line, including each entry's detail view. Defaults: last 30 days, 10 pages.",
+          },
+        },
+        sessionManagement: {
+          description:
+            'Sign in, import, and remove sessions. Login is interactive; ask the user to run it.',
+          commands: {
+            'eb login -e <us1|us2|us3|us4|gov|ca>':
+              'Opens a browser window; the user signs in normally (password, passkey, MFA, SSO). Username and account are detected.',
+            'eb login -e <env> --provider 1password|bitwarden|keychain|env [--item name]':
+              'Headless sign-in with stored credentials.',
+            'eb session import':
+              "Copy the e-Builder session from the user's running Chrome (Chrome 144+, remote debugging approved by the user).",
+            'eb session list': 'Stored sessions (id, username, environment, account).',
+            'eb session test [--delete]':
+              'Check sessions are still signed in. Never deletes unless --delete is passed.',
+            'eb logout [--session-id n | --username u | --all]': 'Remove stored sessions.',
+          },
+        },
         browserDaemon: {
           description:
-            'Before running many eb commands in a row, run "eb daemon start" to reuse one warm headless browser (each command still gets an isolated context; it exits after 15 idle minutes). "eb daemon stop" ends it.',
+            'Before running many eb commands in a row, run "eb daemon start" to reuse one warm headless browser (each command still gets an isolated context; it exits after 15 idle minutes). "eb daemon status" shows whether it is running; "eb daemon stop" ends it.',
           sandboxes:
             "If your tool runner kills child processes when each command finishes, start the daemon with the runner's background/daemon option so the browser survives between commands; otherwise it is reaped immediately and every command falls back to launching its own browser.",
+        },
+        mcpServer: {
+          description:
+            'Model Context Protocol server over stdio for MCP clients. Exposes sessions, page inspection/exec, process inspect and use, and reports as eb_* tools (bulk users/budget-item commands are CLI-only).',
+          commands: {
+            'eb mcp':
+              'Start the server. Tools: eb_session_list, eb_session_test, eb_page_inspect, eb_session_exec, eb_process_inspect, eb_process_startable, eb_process_instances, eb_process_view, eb_process_start, eb_process_set_fields, eb_process_action, eb_process_accept_ownership, eb_process_submit_draft, eb_reports_list, eb_reports_run, eb_reports_export_config, eb_reports_copy, eb_agent_guide.',
+          },
         },
         dialogs: {
           description:
@@ -159,7 +272,7 @@ export default class AgentGuide extends Command {
         'eb.postWebForm(url?, formOrSelector?, overrides?, eventTarget?, eventArg?)':
           'POSTs the form via fetch() and resolves { url, status, html, doc } (doc omitted in Puppeteer mode).',
         'eb.getWorkflowData(processId, workflowId, version?)':
-          'Returns { xml: "<ebWorkflow>…", isActive } via the workflow designer token + ProcessesService.GetWorkflowData. version: 3 = published (default), 1 = saved draft. GUIDs with or without braces.',
+          'Returns { xml: "<ebWorkflow>…", isActive } via the workflow designer token + ProcessesService.GetWorkflowData. version: 3 = published (default), 1 = saved draft. GUIDs with or without braces. For the parsed graph (steps, transitions, field assignments), use `eb process inspect` instead.',
         'eb.getLayoutXml(processId, layoutId)':
           'Returns the page layout definition XML (<ebLayout>).',
         'eb.exportReportCsv(reportId)': 'Runs a custom report and returns the full CSV export.',
@@ -167,6 +280,7 @@ export default class AgentGuide extends Command {
       standardPaths: STANDARD_PATHS,
       safetyRules: [
         'Never submit live workflow forms or click destructive buttons without explicit user consent.',
+        'Bulk CSV commands (users, budgetitems, process setnullfield) change many records at once: run --dry-run first and get explicit consent before the real run.',
         'Check session health with "eb session test --json" (it never deletes sessions unless --delete is passed) or list sessions with "eb session list --json".',
         'Treat only SessionExpiredError as a logged-out session. NetworkError / NavigationTimeoutError / ServerError mean the session is fine.',
         'Use relative e-Builder paths (/da2/...) so the CLI automatically rewrites hostnames to the session environment origin.',
@@ -176,6 +290,27 @@ export default class AgentGuide extends Command {
     if (this.jsonEnabled()) {
       return guideData;
     }
+
+    const bt = '`';
+    const commandReference = Object.entries(guideData.workflows)
+      .flatMap(([key, w]) => {
+        if (!('commands' in w)) return [];
+        const title = key
+          .replace(/([A-Z])/g, ' $1')
+          .replace(/^./, (c) => c.toUpperCase())
+          .replace(/\b(Api|Mcp)\b/g, (w) => w.toUpperCase());
+        const rules: readonly string[] = 'rules' in w ? w.rules : [];
+        return [
+          [
+            `### ${title}`,
+            w.description,
+            '',
+            ...Object.entries(w.commands).map(([k, v]) => `- ${bt}${k}${bt}: ${v}`),
+            ...rules.map((r) => `- _${r}_`),
+          ].join('\n'),
+        ];
+      })
+      .join('\n\n');
 
     const markdownText = `# Trimble e-Builder AI Agent Automation Guide
 
@@ -218,6 +353,13 @@ Puppeteer mode is auto-detected; \`--puppeteer\` / \`--no-puppeteer\` force it. 
 
 For loops of many commands, run \`eb daemon start\` first to reuse a warm headless browser. If your tool runner kills child processes after each command, launch it with the runner's background/daemon option so it persists.
 
+### Understanding a process (fields, layouts, workflow)
+\`\`\`bash
+eb process inspect "RFI" --compact --json     # one line per field and step, with transitions and field assignments
+eb process inspect "RFI" --refresh --json     # full schema; re-reads Setup instead of the cache
+\`\`\`
+Each workflow step lists its actions with the step they lead to, the status they set, and the fields they assign (expressions use \`[Field Label]\`). Conditional steps include their condition and true/false branches.
+
 ### Working with processes (start, act, set fields)
 \`\`\`bash
 eb process startable -P "Project X" --json                      # what can be started here
@@ -237,7 +379,11 @@ eb project settings set --file settings.csv -o results.csv   # project,projectAc
 \`\`\`
 Projects are matched by exact name (including hidden projects) or PortalID. Only the settings you pass are changed, and values are read back after saving.
 
-## 2. In-Browser "eb" Helper Reference
+## 2. Command Reference
+
+${commandReference}
+
+## 3. In-Browser "eb" Helper Reference
 
 | Method | Description |
 | :--- | :--- |
@@ -245,26 +391,16 @@ ${Object.entries(guideData.browserHelperApi)
   .map(([k, v]) => `| \`${k}\` | ${v} |`)
   .join('\n')}
 
-## 3. Error Codes
+## 4. Error Codes
 
 ${Object.entries(guideData.errorCodes)
   .map(([k, v]) => `- **${k}**: ${v}`)
   .join('\n')}
 
-## 4. Standard e-Builder Paths
+## 5. Standard e-Builder Paths
 ${Object.entries(STANDARD_PATHS)
   .map(([k, v]) => `- **${k}**: \`${v}\``)
   .join('\n')}
-
-## 5. Sessions
-- \`eb session list --json\`: list stored sessions (id, username, environment, account).
-- \`eb session test --json\`: verify and refresh sessions. Reports \`reason\`; never deletes unless \`--delete\` is passed, and then only sessions redirected to login.
-
-## 6. MCP Server
-For Model Context Protocol (MCP) clients, run:
-\`\`\`bash
-eb mcp
-\`\`\`
 `;
 
     this.log(markdownText);

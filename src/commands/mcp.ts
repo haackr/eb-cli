@@ -302,7 +302,7 @@ export default class McpCommand extends Command {
 
     server.tool(
       'eb_process_inspect',
-      'Inspect and project a compact, token-efficient schema of an e-Builder process (fields, workflow steps, layout matrix) with local SQLite caching.',
+      "Inspect and project a compact, token-efficient schema of an e-Builder process with local SQLite caching: data fields, layout matrix, and the default workflow as a graph (each step's actors and condition; each action's next step, status, and data field assignments).",
       {
         process: z.string().describe('Name of the Process Type (e.g. "Commitment Change Order")'),
         sessionId: z.number().optional().describe('Session ID to use'),
