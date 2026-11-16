@@ -611,6 +611,49 @@ export class MockEBuilder {
         ),
       );
     }
+    if (
+      path === '/da2/Setup/Admin/Processes/AddEditLayout.aspx' &&
+      !url.searchParams.has('ajaxRefresh')
+    ) {
+      // Layout editor: the field palette lists every data field, on a layout or not.
+      const item = (name: string, id: string) =>
+        `<tr><td id="${I}td_${id}" class="LabelItem DataFieldDetails"><img src=/graphics/clear_12x12.gif />&nbsp;&nbsp;${name}<input type="hidden" id="${I}h_${id}" value="Text" /></td></tr>`;
+      return this.send(
+        res,
+        page(
+          'Edit Layout',
+          `<table><tr><td id="${I}td_1">Section</td></tr>${item('Question', 'dddddddd-0000-4000-8000-000000000001')}${item('Answer', 'dddddddd-0000-4000-8000-000000000002')}${item('Internal Notes', 'dddddddd-0000-4000-8000-000000000003')}${item('Null Date', 'eeeeeeee-0000-4000-8000-000000000009')}</table>`,
+        ),
+      );
+    }
+    if (path === '/da2/Setup/Admin/Roles/ManageRoles.aspx') {
+      return this.send(
+        res,
+        page(
+          'Roles',
+          `<table id="${I}grdResults" class="TableGrid"><tr><th></th><th></th><th>Name</th><th>Description</th></tr>
+          <tr><td><a href="/da2/Setup/Admin/Roles/RoleDetails.aspx?Mode=Edit&amp;RoleID={ABABABAB-0000-4000-8000-000000000003}">Edit</a></td><td></td><td>Project Manager</td><td></td></tr></table>`,
+        ),
+      );
+    }
+    if (path === '/da2/Projects/ProjectList.aspx') {
+      return this.send(
+        res,
+        page(
+          'Projects',
+          `<a href="/da2/Projects/ProjectDetails.aspx?PortalID={ffffffff-0000-4000-8000-000000000001}">RH - Test</a>`,
+        ),
+      );
+    }
+    if (path === '/da2/Projects/ProjectDetails.aspx') {
+      return this.send(
+        res,
+        page(
+          'Project Details',
+          `<table><tr><td class="Label"><DIV>Contractor Company:</DIV></td><td class="Details"><span id="${I}lbl{cccccccc-0000-4000-8000-000000000009}">&nbsp;</span></td></tr></table>`,
+        ),
+      );
+    }
     if (path === '/da2/Setup/Admin/Processes/AddEditLayout.aspx') {
       const lid = url.searchParams.get('LayoutID');
       const field = (name: string, id: string, ro: boolean, req: boolean) =>
@@ -639,8 +682,8 @@ export class MockEBuilder {
       const xml = `<ebWorkflow><Steps>
         <ebStep StepID="s1" Name="Start" StepType="Start" ActorLayoutID="${l1!.id}" NonActorLayoutID="${Z}" ConditionalBranchExpression="" SpawnProcessID=""><Actors/><Actions><ebAction ActionID="a1" Name="Submit" ButtonText="Submit" Status="Projected"><DataFieldAssignments/><ActionRoles/></ebAction></Actions></ebStep>
         <ebStep StepID="s2" Name="Answer" StepType="DataEntry" ActorLayoutID="${l2!.id}" ConditionalBranchExpression="" SpawnProcessID=""><Actors><ebActor RoleID="${Z}" ParticipantType="PersonTakingAction" ParticipantInStepID="s1"/><ebActor RoleID="rrrrrrrr-0000-4000-8000-000000000001" RoleName="Architect" ParticipantType="None" ParticipantInStepID="${Z}"/></Actors><Actions>
-          <ebAction ActionID="a2" Name="Respond" ButtonText="Respond" Status="NotAssigned"><DataFieldAssignments><ebDataFieldAssignment DataFieldID="dddddddd-0000-4000-8000-000000000003" DataFieldName="Internal Notes" AssignmentExpression="&quot;Re: &quot;&amp;{DataField.dddddddd-0000-4000-8000-000000000002}&amp;{DataField.eeeeeeee-0000-4000-8000-000000000009}"/></DataFieldAssignments><ActionRoles/></ebAction>
-          <ebAction ActionID="a3" Name="Reject" ButtonText="Reject" Status="Rejected" RequireComments="true"><DataFieldAssignments/><ActionRoles><ebActionRole RoleID="rrrrrrrr-0000-4000-8000-000000000002" RoleName="Owner" Type="AdditionalActor"/></ActionRoles></ebAction></Actions><NotifyRoles><ebNotifyRole RoleID="rrrrrrrr-0000-4000-8000-000000000003"/></NotifyRoles></ebStep>
+          <ebAction ActionID="a2" Name="Respond" ButtonText="Respond" Status="NotAssigned"><DataFieldAssignments><ebDataFieldAssignment DataFieldID="dddddddd-0000-4000-8000-000000000003" DataFieldName="Internal Notes" AssignmentExpression="&quot;Re: &quot;&amp;{DataField.dddddddd-0000-4000-8000-000000000002}&amp;{DataField.eeeeeeee-0000-4000-8000-000000000009}&amp;{CustomProject.cccccccc-0000-4000-8000-000000000009}&amp;{DataField.eeeeeeee-0000-4000-8000-00000000000f}"/></DataFieldAssignments><ActionRoles/></ebAction>
+          <ebAction ActionID="a3" Name="Reject" ButtonText="Reject" Status="Rejected" RequireComments="true"><DataFieldAssignments/><ActionRoles><ebActionRole RoleID="rrrrrrrr-0000-4000-8000-000000000002" RoleName="Owner" Type="AdditionalActor"/></ActionRoles></ebAction></Actions><NotifyRoles><ebNotifyRole RoleID="abababab-0000-4000-8000-000000000003"/><ebNotifyRole RoleID="abababab-0000-4000-8000-00000000000f"/></NotifyRoles></ebStep>
         <ebStep StepID="s4" Name="Answered?" StepType="Conditional" ConditionalBranchExpression="{DataField.dddddddd-0000-4000-8000-000000000002}&lt;&gt;&quot;&quot;" SpawnProcessID=""><Actors/><Actions><ebAction ActionID="a4" Name="true" ButtonText="true" ConditionalBranchExpressionValue="true" Status="NotAssigned"><DataFieldAssignments/></ebAction><ebAction ActionID="a5" Name="false" ButtonText="false" ConditionalBranchExpressionValue="false" Status="NotAssigned"><DataFieldAssignments/></ebAction></Actions></ebStep>
         <ebStep StepID="s3" Name="Finish" StepType="Finish"><Actions/></ebStep></Steps>
         <Connectors>

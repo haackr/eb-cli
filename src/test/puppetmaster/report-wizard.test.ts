@@ -241,7 +241,11 @@ describe('Report wizard driver against a mock e-Builder (report.ts / report-wiza
         { id: 'a1', name: 'Submit', to: 'Answer', toStepId: 's2', status: 'Projected' },
       ]);
       assert.deepStrictEqual(answer!.actors, ['person who took action at Start', 'Architect']);
-      assert.deepStrictEqual(answer!.notifyRoles, ['role rrrrrrrr-0000-4000-8000-000000000003']);
+      // RoleName-less roles are named from Setup → Roles; unknown ones keep their GUID.
+      assert.deepStrictEqual(answer!.notifyRoles, [
+        'Project Manager',
+        'role abababab-0000-4000-8000-00000000000f',
+      ]);
       assert.deepStrictEqual(answer!.actionDetails, [
         {
           id: 'a2',
@@ -252,8 +256,10 @@ describe('Report wizard driver against a mock e-Builder (report.ts / report-wiza
             {
               field: 'Internal Notes',
               fieldId: 'dddddddd-0000-4000-8000-000000000003',
-              // Known field GUIDs become [Label]; unknown ones are left as-is.
-              expression: '"Re: "&[Answer]&{DataField.eeeeeeee-0000-4000-8000-000000000009}',
+              // Known field GUIDs become [Label] (incl. fields on no layout, from the layout
+              // editor palette) and project custom fields [Project: Label]; unknown ones stay.
+              expression:
+                '"Re: "&[Answer]&[Null Date]&[Project: Contractor Company]&{DataField.eeeeeeee-0000-4000-8000-00000000000f}',
             },
           ],
         },
@@ -309,7 +315,8 @@ describe('Report wizard driver against a mock e-Builder (report.ts / report-wiza
       has('- **Condition:** `[Answer]<>""`');
       has('| Reject (comment required) | Start | Rejected |  |');
       has('| false | _not connected_ |  |');
-      has('- Internal Notes = `"Re: "&[Answer]&{DataField.eeeeeeee-0000-4000-8000-000000000009}`');
+      has('- Internal Notes = `"Re: "&[Answer]&[Null Date]&[Project: Contractor Company]&');
+      has('- **Notifies:** Project Manager; role abababab-0000-4000-8000-00000000000f');
       has('**Reject** can add: Owner');
       has('| Question | Question | Text Block | Yes | All |');
       has('| Field | 01 - Start | 99 - View Only |');

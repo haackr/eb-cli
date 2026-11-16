@@ -89,7 +89,7 @@ export type LayoutFieldAccess = 'required' | 'editable' | 'readonly' | 'hidden';
  * Bumped when fetchProcessSchema starts collecting new data, so cached schemas from older
  * versions are refetched instead of silently missing it.
  */
-export const PROCESS_SCHEMA_VERSION = 2;
+export const PROCESS_SCHEMA_VERSION = 3;
 
 export interface ProcessSchema {
   schemaVersion?: number | undefined;
@@ -366,6 +366,25 @@ export async function fetchProcessSchema(options: {
         );
         const layoutNameById = Object.fromEntries(layouts.map((l) => [l.id, l.name]));
 
+        // Every data field's GUID, including fields on no layout (e.g. "Null Date"), from the
+        // layout editor's field palette: <td id="..._td_{DataFieldID}">Label<input .../></td>.
+        const paletteFieldIds: Record<string, string> = {};
+        if (layouts[0]) {
+          try {
+            const doc = await fetchDoc(
+              `/da2/Setup/Admin/Processes/AddEditLayout.aspx?LayoutID=${layouts[0].id}&ProcessID=${pid}`,
+            );
+            for (const td of Array.from(doc.querySelectorAll('td[id*="_td_"]'))) {
+              const id = td.id.match(/_td_\{?([0-9a-f-]{36})\}?$/i)?.[1];
+              const name = clean(td.textContent);
+              if (id && name) paletteFieldIds[name] ??= id.toLowerCase();
+            }
+          } catch (e: any) {
+            warnings.push(`Data field IDs could not be read: ${e?.message ?? e}`);
+          }
+        }
+        for (const [name, id] of Object.entries(paletteFieldIds)) fieldIds[name] ??= id;
+
         // 4. Default workflow → steps, connectors (action → next step), and field assignments.
         const defaultWorkflow =
           workflows.find((w) => /account default/i.test(w.projectAssignments ?? '')) ??
@@ -395,12 +414,61 @@ export async function fetchProcessSchema(options: {
               const name = a.getAttribute('DataFieldName');
               if (!isNullGuid(id) && name) fieldNameById[id] ??= name;
             }
+            // Project custom fields ({CustomProject.<guid>}), labeled on any project's details
+            // page: <span id="..._lbl{guid}"> next to its <td class="Label">.
+            const projectFieldNameById: Record<string, string> = {};
+            if (/\{CustomProject\./i.test(wf.xml)) {
+              try {
+                const list = await fetchDoc('/da2/Projects/ProjectList.aspx');
+                const portal = Array.from(list.querySelectorAll('a[href]'))
+                  .map((a) => guidOf(a.getAttribute('href') || '', 'PortalID'))
+                  .find(Boolean);
+                if (portal) {
+                  const details = await fetchDoc(
+                    `/da2/Projects/ProjectDetails.aspx?PortalID=${portal}`,
+                  );
+                  for (const span of Array.from(details.querySelectorAll('span[id*="lbl{"]'))) {
+                    const id = span.id.match(/lbl\{([0-9a-f-]{36})\}$/i)?.[1];
+                    const label = clean(span.closest('tr')?.querySelector('td.Label')?.textContent);
+                    if (id && label)
+                      projectFieldNameById[id.toLowerCase()] = label.replace(/:$/, '');
+                  }
+                }
+              } catch (e: any) {
+                warnings.push(`Project custom field names could not be read: ${e?.message ?? e}`);
+              }
+            }
             const readable = (expr: string) =>
-              expr.replace(/\{DataField\.\{?([0-9a-f-]{36})\}?\}/gi, (m, id: string) =>
-                fieldNameById[id.toLowerCase()] ? `[${fieldNameById[id.toLowerCase()]}]` : m,
-              );
-            const roleLabel = (el: Element) =>
-              el.getAttribute('RoleName') || `role ${lower(el.getAttribute('RoleID'))}`;
+              expr
+                .replace(/\{DataField\.\{?([0-9a-f-]{36})\}?\}/gi, (m, id: string) =>
+                  fieldNameById[id.toLowerCase()] ? `[${fieldNameById[id.toLowerCase()]}]` : m,
+                )
+                .replace(/\{CustomProject\.\{?([0-9a-f-]{36})\}?\}/gi, (m, id: string) =>
+                  projectFieldNameById[id.toLowerCase()]
+                    ? `[Project: ${projectFieldNameById[id.toLowerCase()]}]`
+                    : m,
+                );
+
+            // Actor / notify / action roles usually carry only a RoleID: name them from Setup → Roles.
+            const roleNameById: Record<string, string> = {};
+            const unnamedRole = Array.from(doc.querySelectorAll('[RoleID]')).some(
+              (el) => !el.getAttribute('RoleName') && !isNullGuid(lower(el.getAttribute('RoleID'))),
+            );
+            if (unnamedRole) {
+              try {
+                const rolesDoc = await fetchDoc('/da2/Setup/Admin/Roles/ManageRoles.aspx');
+                for (const r of parseGrid(rolesDoc, 'grdResults') ?? []) {
+                  const id = r.hrefs.map((h) => guidOf(h, 'RoleID')).find(Boolean);
+                  if (id && r.cells['Name']) roleNameById[id] = r.cells['Name'];
+                }
+              } catch (e: any) {
+                warnings.push(`Role names could not be read: ${e?.message ?? e}`);
+              }
+            }
+            const roleLabel = (el: Element) => {
+              const id = lower(el.getAttribute('RoleID'));
+              return el.getAttribute('RoleName') || roleNameById[id] || `role ${id}`;
+            };
             const kids = (el: Element, container: string, tag: string) =>
               Array.from(el.children)
                 .filter((c) => c.tagName === container)
