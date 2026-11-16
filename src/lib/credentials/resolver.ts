@@ -1,4 +1,4 @@
-import { execSync, execFileSync } from 'child_process';
+import spawn from 'cross-spawn';
 import type { CredentialProviderType, CredentialReference, ResolvedCredentials } from './types.js';
 
 export class CredentialResolver {
@@ -7,31 +7,48 @@ export class CredentialResolver {
    */
   public static isProviderAvailable(provider: CredentialProviderType): boolean {
     if (provider === 'env') return true;
-    if (provider === '1password') {
-      try {
-        execSync('which op', { stdio: 'ignore' });
-        return true;
-      } catch {
-        return false;
-      }
-    }
-    if (provider === 'bitwarden') {
-      try {
-        execSync('which bw', { stdio: 'ignore' });
-        return true;
-      } catch {
-        return false;
-      }
-    }
+    if (provider === '1password') return this.canExecute('op', ['--version']);
+    if (provider === 'bitwarden') return this.canExecute('bw', ['--version']);
     if (provider === 'keychain') {
-      try {
-        execSync('which security', { stdio: 'ignore' });
-        return true;
-      } catch {
-        return false;
-      }
+      // macOS-only; `security` has no --version, so just look it up on PATH.
+      return process.platform === 'darwin' && this.canExecute('which', ['security']);
     }
     return false;
+  }
+
+  /**
+   * Cross-platform check that a command can be launched. Runs it directly
+   * rather than via `which` (absent on Windows).
+   */
+  private static canExecute(cmd: string, args: string[]): boolean {
+    try {
+      this.run(cmd, args, 10_000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Run a CLI synchronously and return stdout; throws on failure.
+   * Uses cross-spawn so Windows resolves PATHEXT and can launch `.cmd`/`.bat`
+   * shims (e.g. npm-installed `bw.cmd`) with args safely escaped for cmd.exe.
+   */
+  private static run(cmd: string, args: string[], timeout?: number): string {
+    const res = spawn.sync(cmd, args, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      timeout,
+    });
+    if (res.error) throw res.error;
+    if (res.status !== 0) {
+      const stderr = (res.stderr || '').trim();
+      throw new Error(
+        `Command failed: ${cmd} ${args[0] ?? ''} (exit ${res.status ?? res.signal})${stderr ? `\n${stderr}` : ''}`,
+      );
+    }
+    return res.stdout;
   }
 
   /**
@@ -63,10 +80,7 @@ export class CredentialResolver {
         if (ref.vault) {
           args.push('--vault', ref.vault);
         }
-        const output = execFileSync('op', args, {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'ignore'],
-        });
+        const output = this.run('op', args);
         const code = output.trim();
         return /^\d{6,8}$/.test(code) ? code : undefined;
       } catch {
@@ -76,10 +90,7 @@ export class CredentialResolver {
 
     if (ref.provider === 'bitwarden') {
       try {
-        const output = execFileSync('bw', ['get', 'totp', ref.itemRef], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'ignore'],
-        });
+        const output = this.run('bw', ['get', 'totp', ref.itemRef]);
         const code = output.trim();
         return /^\d{6,8}$/.test(code) ? code : undefined;
       } catch {
@@ -108,7 +119,7 @@ export class CredentialResolver {
 
     let stdout: string;
     try {
-      stdout = execFileSync('op', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      stdout = this.run('op', args);
     } catch (err: any) {
       throw new Error(`Failed to read item "${itemRef}" from 1Password: ${err.message}`);
     }
@@ -159,10 +170,7 @@ export class CredentialResolver {
 
     let stdout: string;
     try {
-      stdout = execFileSync('bw', ['get', 'item', itemRef], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      stdout = this.run('bw', ['get', 'item', itemRef]);
     } catch (err: any) {
       throw new Error(`Failed to read item "${itemRef}" from Bitwarden: ${err.message}`);
     }
@@ -191,10 +199,7 @@ export class CredentialResolver {
     }
 
     try {
-      const stdout = execFileSync('security', ['find-generic-password', '-s', itemRef, '-w'], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const stdout = this.run('security', ['find-generic-password', '-s', itemRef, '-w']);
       return {
         password: stdout.trim(),
       };

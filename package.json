@@ -93,6 +93,7 @@
     "better-sqlite3": "^12.5.0",
     "cli-progress": "^3.12.0",
     "cli-table3": "^0.6.5",
+    "cross-spawn": "^7.0.6",
     "ora": "^9.0.0",
     "papaparse": "^5.5.3",
     "puppeteer": "^25.16.0"
@@ -106,6 +107,7 @@
     "@oclif/core": "^4.11.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cli-progress": "^3.11.6",
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^24.9.2",
     "@typescript-eslint/eslint-plugin": "^8.50.1",
     "@typescript-eslint/parser": "^8.50.1",
