@@ -59,6 +59,7 @@ export default class ApiLogsDownload extends BaseSessionCommand {
       char: 'o',
       description: 'Path to output JSONL file (one log record per line)',
       default: getDefaultOutputPath(),
+      defaultHelp: async () => './api-logs-<timestamp>.jsonl',
     }),
     overwrite: Flags.boolean({
       description: 'Overwrite output file if it already exists',

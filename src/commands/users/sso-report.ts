@@ -40,6 +40,7 @@ export default class UsersSsoReport extends BaseSessionCommand {
       char: 'o',
       description: 'Path to CSV output file',
       default: defaultOutputPath(),
+      defaultHelp: async () => 'users-sso-report-<timestamp>.csv',
     }),
     overwrite: Flags.boolean({
       description: 'Overwrite output file if it exists',

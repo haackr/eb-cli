@@ -13,11 +13,12 @@
     "lint:fix": "eslint --ext .ts src --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "simple-git-hooks"
+    "prepare": "simple-git-hooks",
+    "readme": "npm run build && oclif readme --no-aliases && prettier --write README.md"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "UNLICENSED",
   "engines": {
     "node": "22.14.0"
   },
@@ -139,5 +140,6 @@
     "/bin",
     "/dist",
     "/oclif.manifest.json"
-  ]
+  ],
+  "private": true
 }

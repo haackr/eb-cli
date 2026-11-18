@@ -41,7 +41,7 @@ export default class AgentGuide extends Command {
     '<%= config.bin %> <%= command.id %> --json',
   ];
   static override enableJsonFlag = true;
-  static override aliases: string[] = ['agent:guide', 'agent-guide'];
+  static override aliases: string[] = ['agent-guide'];
 
   static override flags = {
     markdown: Flags.boolean({

@@ -34,3 +34,11 @@ jobs:
 
       - name: Check code formatting
         run: npm run format:check
+
+      - name: Check README command reference is up to date
+        run: |
+          npm run readme
+          git diff --exit-code README.md || {
+            echo "::error file=README.md::README.md is out of date. Run 'npm run readme' and commit the result."
+            exit 1
+          }

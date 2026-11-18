@@ -36,7 +36,6 @@ The imported session is the same login as your Chrome tab: logging out of either
       min: 5,
     }),
   };
-  static override aliases: string[] = ['session:import'];
 
   public async run(): Promise<void> {
     const { flags } = await this.parse(SessionImport);

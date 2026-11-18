@@ -30,7 +30,7 @@ export default class SessionExec extends BaseSessionCommand {
     '<%= config.bin %> <%= command.id %> /da2/Processes/ImportProcesses/ImportProcesses.aspx --puppeteer --script-file inspect-step2.js --arg \'{"file":"./dummy.xlsx"}\' --json',
   ];
   static override enableJsonFlag = true;
-  static override aliases: string[] = ['session:exec', 'exec'];
+  static override aliases: string[] = ['exec'];
 
   static override args = {
     url: Args.string({
